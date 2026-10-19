@@ -1,0 +1,83 @@
+
+name: Android feasibility diagnostics
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Inspect build prerequisites
+        shell: bash
+        run: |
+          set -eu
+
+          echo "=== CMake version ==="
+          cmake --version
+
+          echo "=== Available CMake presets ==="
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("CMakePresets.json")
+          if not path.exists():
+              print("CMakePresets.json not found")
+              raise SystemExit(1)
+
+          data = json.loads(path.read_text())
+          presets = data.get("configurePresets", [])
+          for preset in presets:
+              print("-", preset.get("name", "(unnamed)"))
+
+          android = [
+              p.get("name", "")
+              for p in presets
+              if "android" in p.get("name", "").lower()
+          ]
+          print("Android presets:", android or "none declared")
+          PY
+
+          echo "=== ReXGlue configuration ==="
+          if test -f generated/rexglue.cmake; then
+            echo "generated/rexglue.cmake exists"
+          else
+            echo "generated/rexglue.cmake is missing"
+          fi
+
+          echo "=== Game data availability ==="
+          if test -f game/default.xex; then
+            echo "game/default.xex exists"
+          else
+            echo "game/default.xex is absent"
+          fi
+
+          echo "=== Generated game code ==="
+          if test -d generated/default; then
+            echo "generated/default exists"
+          else
+            echo "generated/default is absent"
+          fi
+
+      - name: Summarize limitations
+        if: always()
+        run: |
+          {
+            echo "## Android feasibility check"
+            echo ""
+            echo "- This job only inspects prerequisites."
+            echo "- It does not build an APK."
+            echo "- Android compatibility of the MCLA ReXGlue version is not yet established."
+            echo "- No game data is uploaded."
+          } >> "$GITHUB_STEP_SUMMARY"
