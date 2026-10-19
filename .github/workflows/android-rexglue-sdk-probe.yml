@@ -45,12 +45,19 @@ jobs:
           test "$(git -C third_party/rexglue-sdk rev-parse HEAD)" = \
             "f5337cdc947ff6d4c4196737e2c807a48f2a1fc2"
 
-      - name: Apply MCLA SDK patch
+      - name: Locate and apply MCLA SDK patch
         shell: bash
         run: |
           set -euxo pipefail
-          git -C third_party/rexglue-sdk apply \
-            patches/rexglue-v0.10.0-mcla.patch
+          PATCH_FILE="$GITHUB_WORKSPACE/patches/rexglue-v0.10.0-mcla.patch"
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "::error::Missing patch file: $PATCH_FILE"
+            echo "Patch files present in the repository checkout:"
+            find "$GITHUB_WORKSPACE" -maxdepth 5 -type f -path '*/patches/*' -print || true
+            echo "The required MCLA SDK patch is absent; the SDK configuration test cannot continue."
+            exit 1
+          fi
+          git -C third_party/rexglue-sdk apply "$PATCH_FILE"
 
       - name: Configure SDK for Android arm64 (diagnostic only)
         id: configure
