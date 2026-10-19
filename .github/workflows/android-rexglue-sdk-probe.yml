@@ -1,0 +1,98 @@
+name: Android ReXGlue SDK compatibility probe
+
+'on':
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android-sdk-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout MCLA repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install Android NDK and build tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sdkmanager "ndk;27.2.12479018" "cmake;3.31.6" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/cmake/3.31.6/bin" >> "$GITHUB_PATH"
+
+      - name: Clone pinned ReXGlue SDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --recursive --branch v0.10.0 \
+            https://github.com/rexglue/rexglue-sdk.git third_party/rexglue-sdk
+          test "$(git -C third_party/rexglue-sdk rev-parse HEAD)" = \
+            "f5337cdc947ff6d4c4196737e2c807a48f2a1fc2"
+
+      - name: Apply MCLA SDK patch
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git -C third_party/rexglue-sdk apply \
+            patches/rexglue-v0.10.0-mcla.patch
+
+      - name: Configure SDK for Android arm64 (diagnostic only)
+        id: configure
+        shell: bash
+        run: |
+          set +e
+          cmake -S third_party/rexglue-sdk -B build/rexglue-android-arm64 \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DANDROID_STL=c++_shared \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            2>&1 | tee android-sdk-configure.log
+
+          result=${PIPESTATUS[0]}
+          echo "cmake_exit_code=$result" >> "$GITHUB_OUTPUT"
+          if [ "$result" -eq 0 ]; then
+            echo "Android SDK CMake configuration succeeded."
+          else
+            echo "Android SDK CMake configuration failed; inspect the log artifact."
+          fi
+          exit 0
+
+      - name: Upload diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-rexglue-sdk-probe-log
+          path: android-sdk-configure.log
+          if-no-files-found: warn
+
+      - name: Summarize result
+        if: always()
+        env:
+          CMAKE_EXIT_CODE: ${{ steps.configure.outputs.cmake_exit_code }}
+        run: |
+          {
+            echo "## Android ReXGlue SDK compatibility probe"
+            echo ""
+            echo "- CMake exit code: ${CMAKE_EXIT_CODE:-unknown}"
+            echo "- This only tests SDK configuration; it does not build MCLA or an APK."
+            echo "- Game data is not included or uploaded."
+          } >> "$GITHUB_STEP_SUMMARY"
