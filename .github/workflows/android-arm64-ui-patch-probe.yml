@@ -73,6 +73,7 @@ jobs:
           echo "Skipping MCLA-specific patches for this diagnostic."
           echo "Testing the Android-enabled ReXGlue fork."
 
+      
       - name: Patch floating-point parsing for Android NDK
         run: |
           set -euo pipefail
@@ -81,18 +82,30 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import sys
+
           p = Path("third_party/rexglue-sdk/include/rex/string/numeric.h")
           s = p.read_text()
-          old = "#if REX_PLATFORM_MAC || REX_PLATFORM_PS5"
-          new = "#if REX_PLATFORM_MAC || REX_PLATFORM_PS5 || REX_PLATFORM_ANDROID"
+
+          old = "#if REX_PLATFORM_MAC"
+          new = "#if REX_PLATFORM_MAC || REX_PLATFORM_ANDROID"
+
           count = s.count(old)
-          if count < 2:
-              raise SystemExit(f"Expected at least 2 platform guards, found {count}; refusing unsafe patch.")
-          p.write_text(s.replace(old, new))
+
+          if count != 3:
+              raise SystemExit(
+                  f"Expected 3 exact platform guards, found {count}; "
+                  "inspect numeric.h before changing it."
+              )
+
+          s = s.replace(old, new)
+
+          p.write_text(s)
           print(f"Updated {count} platform guards in {p}")
           PY
 
-          grep -n -E 'REX_PLATFORM_MAC.*REX_PLATFORM_PS5.*REX_PLATFORM_ANDROID|std::from_chars\(range.data|std::from_chars\(p, end, v.f32' "$HEADER"
+          grep -n -E 'REX_PLATFORM_MAC.*REX_PLATFORM_ANDROID|portable_float_from_chars|std::from_chars' "$HEADER"
+
 
       - name: Capture numeric header and platform detection diagnostics
         if: always()
