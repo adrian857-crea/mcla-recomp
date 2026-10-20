@@ -77,6 +77,27 @@ jobs:
           git apply ../../patches/rexglue-linux-procmap-query.patch
           git apply ../../patches/rexglue-linux-wait-sleep.patch
 
+      - name: Patch floating-point parsing for Android NDK
+        run: |
+          set -euo pipefail
+          HEADER="third_party/rexglue-sdk/include/rex/string/numeric.h"
+          test -f "$HEADER"
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("third_party/rexglue-sdk/include/rex/string/numeric.h")
+          s = p.read_text()
+          old = "#if REX_PLATFORM_MAC || REX_PLATFORM_PS5"
+          new = "#if REX_PLATFORM_MAC || REX_PLATFORM_PS5 || REX_PLATFORM_ANDROID"
+          count = s.count(old)
+          if count < 2:
+              raise SystemExit(f"Expected at least 2 platform guards, found {count}; refusing unsafe patch.")
+          p.write_text(s.replace(old, new))
+          print(f"Updated {count} platform guards in {p}")
+          PY
+
+          grep -n -E 'REX_PLATFORM_MAC.*REX_PLATFORM_PS5.*REX_PLATFORM_ANDROID|std::from_chars\(range.data|std::from_chars\(p, end, v.f32' "$HEADER"
+
       - name: Capture numeric header and platform detection diagnostics
         if: always()
         run: |
