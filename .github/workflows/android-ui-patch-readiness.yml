@@ -1,0 +1,72 @@
+name: Android UI Patch Readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout MCLA fork
+        uses: actions/checkout@v4
+        with:
+          repository: adrian857-crea/mcla-recomp
+          path: mcla-recomp
+          submodules: false
+
+      - name: Clone pinned ReXGlue SDK
+        run: |
+          git clone --recursive --branch v0.10.0 https://github.com/rexglue/rexglue-sdk.git third_party/rexglue-sdk
+          test "$(git -C third_party/rexglue-sdk rev-parse HEAD)" = "f5337cdc947ff6d4c4196737e2c807a48f2a1fc2"
+
+      - name: Inspect Android window and surface APIs
+        shell: bash
+        run: |
+          set +e
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          OUT="$GITHUB_WORKSPACE/android-ui-patch-readiness.txt"
+          {
+            echo "=== Revision ==="
+            git -C "$SDK" rev-parse HEAD
+
+            echo
+            echo "=== Surface base interface ==="
+            sed -n '1,240p' "$SDK/include/rex/ui/surface.h"
+
+            echo
+            echo "=== Existing Linux surface header/source ==="
+            sed -n '1,220p' "$SDK/include/rex/ui/surface_gnulinux.h"
+            sed -n '1,260p' "$SDK/src/ui/surface_gnulinux.cpp"
+
+            echo
+            echo "=== Android window/surface symbols across SDK ==="
+            grep -RInE 'SDL_PROP_WINDOW_ANDROID|SDL_GetWindowProperties|ANativeWindow|AndroidNativeWindowSurface|VK_KHR_android_surface|SDL_Vulkan_CreateSurface' \
+              "$SDK/include" "$SDK/src" "$SDK/thirdparty/SDL" 2>/dev/null | head -n 300
+
+            echo
+            echo "=== SDL Android headers available in vendored source ==="
+            find "$SDK/thirdparty/SDL" -type f \( -iname '*android*' -o -iname 'SDL_vulkan.h' -o -iname 'SDL_video.h' \) 2>/dev/null | head -n 160
+
+            echo
+            echo "=== Windowed app Android-specific code ==="
+            sed -n '1,240p' "$SDK/include/rex/ui/windowed_app.h"
+            grep -RInE 'REX_PLATFORM_ANDROID|ANativeWindow|android_app|onStart|onResume|onPause|onStop' \
+              "$SDK/src/ui" "$SDK/include/rex/ui" 2>/dev/null | head -n 220
+
+            echo
+            echo "=== Platform CMake conditionals ==="
+            grep -RInE 'if\\(ANDROID|if\\(UNIX|REX_PLATFORM_ANDROID|surface_gnulinux.cpp|x11-xcb|wayland-client' \
+              "$SDK/src/ui/CMakeLists.txt" "$SDK/src/CMakeLists.txt" "$SDK/CMakeLists.txt" 2>/dev/null
+          } > "$OUT" 2>&1
+          cat "$OUT"
+
+      - name: Upload readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ui-patch-readiness
+          path: android-ui-patch-readiness.txt
+          if-no-files-found: warn
