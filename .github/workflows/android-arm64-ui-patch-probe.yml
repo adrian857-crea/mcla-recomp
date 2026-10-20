@@ -181,20 +181,76 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/configure.log"
 
       - name: Compile UI target if configuration succeeds
+                  - name: Compile UI target if configuration succeeds
         if: always()
         continue-on-error: true
+        shell: bash
         run: |
           mkdir -p android-ui-probe
 
+          printf '%s\n' \
+            'Build result: UNKNOWN — compilation has not finished.' \
+            'cmake --build exit code: NOT_RECORDED' \
+            'tee exit code: NOT_RECORDED' \
+            'rexui target complete: UNKNOWN' \
+            > android-ui-probe/build-status.txt
+
           if test -f android-ui-probe/sdk/build.ninja; then
+            # O Actions inicia Bash com "errexit"; desative-o para capturar
+            # os dois status da pipeline mesmo quando o build falhar.
+            set +e
             set -o pipefail
+
             cmake --build android-ui-probe/sdk \
               --target rexui -- -k 0 \
               2>&1 | tee android-ui-probe/build-ui.log
+
+            # Capturar PIPESTATUS em uma única operação, imediatamente
+            # após a pipeline: [0] é cmake; [1] é tee.
+            pipeline_status=( "${PIPESTATUS[@]}" )
+            build_exit_code="${pipeline_status[0]}"
+            tee_exit_code="${pipeline_status[1]}"
           else
             echo "No build.ninja generated; configure did not complete." \
               > android-ui-probe/build-ui.log
+            build_exit_code="NOT_RUN"
+            tee_exit_code="NOT_RUN"
           fi
+
+          if [[ "$build_exit_code" == "0" ]]; then
+            rexui_complete="YES"
+            build_result="SUCCESS — cmake --build returned 0; target rexui built or already up to date."
+          elif [[ "$build_exit_code" == "NOT_RUN" ]]; then
+            rexui_complete="NO"
+            build_result="FAILURE — cmake --build was not run because build.ninja was not generated."
+          else
+            rexui_complete="NO"
+            build_result="FAILURE — cmake --build returned exit code ${build_exit_code}; rexui is not confirmed complete."
+          fi
+
+          {
+            printf 'Build result: %s\n' "$build_result"
+            printf 'cmake --build exit code: %s\n' "$build_exit_code"
+            printf 'tee exit code: %s\n' "$tee_exit_code"
+            printf 'rexui target complete: %s\n' "$rexui_complete"
+          } > android-ui-probe/build-status.txt
+
+          # Propagar la salida real de cmake. Si cmake tuvo éxito pero tee
+          # falló, fallar la etapa por el problema de captura, sin cambiar
+          # el resultado real del build registrado arriba.
+          if [[ "$build_exit_code" != "0" ]]; then
+            if [[ "$build_exit_code" =~ ^[0-9]+$ ]]; then
+              exit "$build_exit_code"
+            fi
+            exit 1
+          fi
+
+          if [[ "$tee_exit_code" != "0" ]]; then
+            exit "$tee_exit_code"
+          fi
+
+          exit 0
+
 
       - name: Generate diagnostic report
         if: always()
