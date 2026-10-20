@@ -74,6 +74,7 @@ jobs:
           echo "Testing the Android-enabled ReXGlue fork."
 
       
+      
       - name: Patch floating-point parsing for Android NDK
         run: |
           set -euo pipefail
@@ -82,23 +83,29 @@ jobs:
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
           import sys
 
           p = Path("third_party/rexglue-sdk/include/rex/string/numeric.h")
           s = p.read_text()
 
-          old = "#if REX_PLATFORM_MAC"
-          new = "#if REX_PLATFORM_MAC || REX_PLATFORM_ANDROID"
+          pattern = re.compile(
+              r"^#if REX_PLATFORM_MAC\s*$",
+              re.MULTILINE
+          )
 
-          count = s.count(old)
+          count = len(pattern.findall(s))
 
-          if count != 3:
+          if count < 3:
               raise SystemExit(
-                  f"Expected 3 exact platform guards, found {count}; "
+                  f"Expected at least 3 exact MAC guards, found {count}; "
                   "inspect numeric.h before changing it."
               )
 
-          s = s.replace(old, new)
+          s = pattern.sub(
+              "#if REX_PLATFORM_MAC || REX_PLATFORM_ANDROID",
+              s
+          )
 
           p.write_text(s)
           print(f"Updated {count} platform guards in {p}")
