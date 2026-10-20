@@ -51,17 +51,22 @@ jobs:
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
-      - name: Clone pinned ReXGlue SDK
+      
+      - name: Clone my Android-enabled ReXGlue SDK
         run: |
           set -euo pipefail
 
           git clone --recursive \
-            --branch v0.10.0 \
-            https://github.com/rexglue/rexglue-sdk.git \
+            https://github.com/adrian857-crea/rexglue-sdk.git \
             third_party/rexglue-sdk
 
-          git -C third_party/rexglue-sdk checkout \
-            f5337cdc947ff6d4c4196737e2c807a48f2a1fc2
+          echo "=== ReXGlue commit used ==="
+          git -C third_party/rexglue-sdk log -1 --oneline
+
+          echo "=== Android surface source ==="
+          grep -n -A 8 -B 4 'elseif(ANDROID)' \
+            third_party/rexglue-sdk/src/ui/CMakeLists.txt
+
 
       - name: Apply MCLA SDK patches
         run: |
