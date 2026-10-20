@@ -130,8 +130,8 @@ jobs:
           s = s[:match.start()] + replacement + s[match.end():]
 
           s, count = re.subn(
-              r'if\s*\(\s*UNIX\s+AND\s+NOT\s+APPLE\s*\)',
-              'if(UNIX AND NOT APPLE AND NOT ANDROID)',
+              r'if\s*\(\s*UNIX\s+AND\s+NOT\s+APPLE(?:\s+AND\s+NOT\s+PS5)?\s*\)',
+              'if(UNIX AND NOT APPLE AND NOT PS5 AND NOT ANDROID)',
               s,
               count=1
           )
