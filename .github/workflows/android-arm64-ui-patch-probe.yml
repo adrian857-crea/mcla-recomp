@@ -67,20 +67,11 @@ jobs:
           grep -n -A 8 -B 4 'elseif(ANDROID)' \
             third_party/rexglue-sdk/src/ui/CMakeLists.txt
 
-
-      - name: Apply MCLA SDK patches
+      - name: Skip MCLA patches for Android UI diagnostic
         run: |
           set -euo pipefail
-          cd third_party/rexglue-sdk
-
-          git apply ../../patches/rexglue-v0.10.0-mcla.patch
-          git apply ../../patches/rexglue-minmax-blend-factor.patch
-
-          git -C thirdparty/FFmpeg apply \
-            ../../../patches/rexglue-ffmpeg-ps5-config.patch || true
-
-          git apply ../../patches/rexglue-linux-procmap-query.patch
-          git apply ../../patches/rexglue-linux-wait-sleep.patch
+          echo "Skipping MCLA-specific patches for this diagnostic."
+          echo "Testing the Android-enabled ReXGlue fork."
 
       - name: Patch floating-point parsing for Android NDK
         run: |
