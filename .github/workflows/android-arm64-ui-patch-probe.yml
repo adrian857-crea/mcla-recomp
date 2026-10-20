@@ -28,7 +28,7 @@ jobs:
           SDK_ROOT="$RUNNER_TEMP/android-sdk"
           mkdir -p "$SDK_ROOT/cmdline-tools"
 
-          curl -fsSL \
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fSL \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -o "$RUNNER_TEMP/cmdline-tools.zip"
 
