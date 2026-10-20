@@ -1,0 +1,72 @@
+name: Android ReXGlue UI Platform Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout MCLA fork
+        uses: actions/checkout@v4
+        with:
+          repository: adrian857-crea/mcla-recomp
+          path: mcla-recomp
+          submodules: false
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cmake ninja-build python3 pkg-config
+
+      - name: Clone pinned ReXGlue SDK
+        run: |
+          git clone --recursive --branch v0.10.0 https://github.com/rexglue/rexglue-sdk.git third_party/rexglue-sdk
+          git -C third_party/rexglue-sdk rev-parse HEAD | tee sdk-revision.txt
+          git -C third_party/rexglue-sdk status --short
+          test "$(git -C third_party/rexglue-sdk rev-parse HEAD)" = "f5337cdc947ff6d4c4196737e2c807a48f2a1fc2"
+
+      - name: Inspect Android UI and Vulkan surface support
+        run: |
+          set +e
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          {
+            echo "=== SDK revision ==="
+            git -C "$SDK" rev-parse HEAD
+            echo
+            echo "=== Android surface files in v0.10.0 ==="
+            find "$SDK/include/rex/ui" "$SDK/src/ui" -maxdepth 3 -iname '*android*' -o -iname '*surface*' | sort
+            echo
+            echo "=== Platform macros ==="
+            sed -n '1,140p' "$SDK/include/rex/platform.h"
+            echo
+            echo "=== UI CMake platform source selection and dependencies ==="
+            nl -ba "$SDK/src/ui/CMakeLists.txt" | sed -n '45,180p'
+            echo
+            echo "=== Window SDL platform includes and surface creation ==="
+            nl -ba "$SDK/src/ui/window_sdl.cpp" | sed -n '15,50p'
+            nl -ba "$SDK/src/ui/window_sdl.cpp" | sed -n '340,450p'
+            echo
+            echo "=== Vulkan Android surface support ==="
+            grep -RInE 'AndroidNativeWindowSurface|surface_android|vkCreateAndroidSurfaceKHR|VK_USE_PLATFORM_ANDROID_KHR|REX_PLATFORM_ANDROID' \
+              "$SDK/include/rex/ui" "$SDK/src/ui" "$SDK/include/rex/ui/vulkan" "$SDK/src/ui/vulkan" 2>/dev/null
+            echo
+            echo "=== SDL3 Android platform availability in SDK build tree ==="
+            grep -RInE 'SDL_VIDEO_DRIVER_ANDROID|SDL_PLATFORM_ANDROID|ANDROID' \
+              "$SDK/thirdparty" "$SDK/CMakeLists.txt" "$SDK/cmake" 2>/dev/null | head -n 160
+          } > android-ui-platform-inspection.txt 2>&1
+          cat android-ui-platform-inspection.txt
+          exit 0
+
+      - name: Upload source inspection even if later steps fail
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-ui-platform-inspection
+          path: |
+            android-ui-platform-inspection.txt
+            sdk-revision.txt
+          if-no-files-found: warn
