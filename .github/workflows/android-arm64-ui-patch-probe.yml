@@ -1,228 +1,242 @@
 name: Android ARM64 UI Patch Probe
 
-on:
-  workflow_dispatch:
+on:workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: contents: read
 
 jobs:
-  probe:
-    runs-on: ubuntu-24.04
+probe:
+runs-on: ubuntu-24.04
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          submodules: false
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v4
+    with:
+      submodules: false
 
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake ninja-build git python3 unzip
+  - name: Install build tools
+    run: |
+      sudo apt-get update
+      sudo apt-get install -y cmake ninja-build git python3 unzip
 
-      - name: Install Android NDK
-        run: |
-          SDK_ROOT="$RUNNER_TEMP/android-sdk"
-          mkdir -p "$SDK_ROOT/cmdline-tools"
+  - name: Install Android NDK
+    run: |
+      set -euo pipefail
 
-          curl -fsSL \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
-            -o "$RUNNER_TEMP/cmdline-tools.zip"
+      SDK_ROOT="$RUNNER_TEMP/android-sdk"
+      mkdir -p "$SDK_ROOT/cmdline-tools"
 
-          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" \
-            -d "$RUNNER_TEMP/cmdline-tools"
+      curl -fsSL \
+        https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+        -o "$RUNNER_TEMP/cmdline-tools.zip"
 
-          mkdir -p "$SDK_ROOT/cmdline-tools/latest"
-          mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* \
-            "$SDK_ROOT/cmdline-tools/latest/"
+      unzip -q "$RUNNER_TEMP/cmdline-tools.zip" \
+        -d "$RUNNER_TEMP/cmdline-tools"
 
-          yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            --sdk_root="$SDK_ROOT" --licenses >/dev/null
+      mkdir -p "$SDK_ROOT/cmdline-tools/latest"
+      mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* \
+        "$SDK_ROOT/cmdline-tools/latest/"
 
-          "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
-            --sdk_root="$SDK_ROOT" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "ndk;27.2.12479018"
+      yes | "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+        --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
 
-          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+      "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+        --sdk_root="$SDK_ROOT" \
+        "platform-tools" \
+        "platforms;android-35" \
+        "ndk;27.2.12479018"
 
-      - name: Clone pinned ReXGlue SDK
-        run: |
-          git clone --recursive \
-            --branch v0.10.0 \
-            https://github.com/rexglue/rexglue-sdk.git \
-            third_party/rexglue-sdk
+      echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+      echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
-          git -C third_party/rexglue-sdk checkout \
-            f5337cdc947ff6d4c4196737e2c807a48f2a1fc2
+  - name: Clone pinned ReXGlue SDK
+    run: |
+      set -euo pipefail
 
-      - name: Apply MCLA SDK patches
-        run: |
-          cd third_party/rexglue-sdk
+      git clone --recursive \
+        --branch v0.10.0 \
+        https://github.com/rexglue/rexglue-sdk.git \
+        third_party/rexglue-sdk
 
-          git apply ../../patches/rexglue-v0.10.0-mcla.patch
-          git apply ../../patches/rexglue-minmax-blend-factor.patch
+      git -C third_party/rexglue-sdk checkout \
+        f5337cdc947ff6d4c4196737e2c807a48f2a1fc2
 
-          git -C thirdparty/FFmpeg apply \
-            ../../../patches/rexglue-ffmpeg-ps5-config.patch || true
+  - name: Apply MCLA SDK patches
+    run: |
+      set -euo pipefail
+      cd third_party/rexglue-sdk
 
-          git apply ../../patches/rexglue-linux-procmap-query.patch
-          git apply ../../patches/rexglue-linux-wait-sleep.patch
+      git apply ../../patches/rexglue-v0.10.0-mcla.patch
+      git apply ../../patches/rexglue-minmax-blend-factor.patch
 
-      - name: Apply temporary Android UI CMake probe patch
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
+      git -C thirdparty/FFmpeg apply \
+        ../../../patches/rexglue-ffmpeg-ps5-config.patch || true
 
-          p = Path("third_party/rexglue-sdk/src/ui/CMakeLists.txt")
-          s = p.read_text()
+      git apply ../../patches/rexglue-linux-procmap-query.patch
+      git apply ../../patches/rexglue-linux-wait-sleep.patch
 
-          old = '''if(WIN32)
-              set(REXUI_PLATFORM_SOURCES
-                  surface_win.cpp
-              )
-          elseif(APPLE)
-              set(REXUI_PLATFORM_SOURCES
-                  surface_mac.cpp
-              )
-          else()
-              set(REXUI_PLATFORM_SOURCES
-                  surface_gnulinux.cpp
-              )
-          endif()'''
+  - name: Apply temporary Android UI CMake probe patch
+    run: |
+      set -euo pipefail
 
-          new = '''if(WIN32)
-              set(REXUI_PLATFORM_SOURCES
-                  surface_win.cpp
-              )
-          elseif(APPLE)
-              set(REXUI_PLATFORM_SOURCES
-                  surface_mac.cpp
-              )
-          elseif(ANDROID)
-              # Diagnostic only: Android surface implementation is not confirmed.
-              set(REXUI_PLATFORM_SOURCES)
-          else()
-              set(REXUI_PLATFORM_SOURCES
-                  surface_gnulinux.cpp
-              )
-          endif()'''
+      python3 - <<'PY'
+      from pathlib import Path
+      import re
+      import sys
 
-          if old not in s:
-              raise SystemExit(
-                  "Could not find expected platform-source block."
-              )
+      p = Path("third_party/rexglue-sdk/src/ui/CMakeLists.txt")
 
-          s = s.replace(old, new, 1)
+      if not p.exists():
+          print(f"ERROR: File not found: {p}")
+          sys.exit(1)
 
-          old_deps = (
-              'if(UNIX AND NOT APPLE)\n'
-              '    find_package(PkgConfig REQUIRED)'
+      s = p.read_text()
+
+      pattern = re.compile(
+          r'if\s*\(\s*WIN32\s*\).*?'
+          r'set\s*\(\s*REXUI_PLATFORM_SOURCES\b.*?'
+          r'\)\s*endif\s*\(\s*\)',
+          re.DOTALL
+      )
+
+      match = pattern.search(s)
+
+      if not match:
+          print("ERROR: Could not locate platform-source selection.")
+          print("Relevant lines from CMakeLists.txt:")
+          for i, line in enumerate(s.splitlines(), 1):
+              if any(term in line for term in (
+                  "REXUI_PLATFORM_SOURCES",
+                  "surface_win.cpp",
+                  "surface_mac.cpp",
+                  "surface_gnulinux.cpp",
+              )):
+                  print(f"{i}: {line}")
+          sys.exit(1)
+
+      replacement = """if(WIN32)
+          set(REXUI_PLATFORM_SOURCES surface_win.cpp)
+      elseif(APPLE)
+          set(REXUI_PLATFORM_SOURCES surface_mac.cpp)
+      elseif(ANDROID)
+          # Diagnostic only: Android surface implementation is not supplied.
+          set(REXUI_PLATFORM_SOURCES)
+      else()
+          set(REXUI_PLATFORM_SOURCES surface_gnulinux.cpp)
+      endif()"""
+
+      s = s[:match.start()] + replacement + s[match.end():]
+
+      s, count = re.subn(
+          r'if\s*\(\s*UNIX\s+AND\s+NOT\s+APPLE\s*\)',
+          'if(UNIX AND NOT APPLE AND NOT ANDROID)',
+          s,
+          count=1
+      )
+
+      if count == 0:
+          print(
+              "WARNING: Linux dependency condition was not found. "
+              "Continuing to collect the CMake diagnostic."
           )
 
-          new_deps = (
-              'if(UNIX AND NOT APPLE AND NOT ANDROID)\n'
-              '    find_package(PkgConfig REQUIRED)'
-          )
+      p.write_text(s)
+      print("Temporary Android CMake probe patch applied.")
+      PY
 
-          if old_deps not in s:
-              raise SystemExit(
-                  "Could not find expected Linux dependency block."
-              )
+  - name: Configure SDK for Android ARM64
+    id: configure
+    continue-on-error: true
+    run: |
+      set -o pipefail
 
-          s = s.replace(old_deps, new_deps, 1)
-          p.write_text(s)
+      SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+      NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+      BUILD="$GITHUB_WORKSPACE/android-ui-probe/sdk"
 
-          print("Temporary Android CMake probe patch applied.")
-          PY
+      mkdir -p "$GITHUB_WORKSPACE/android-ui-probe"
 
-      - name: Configure SDK for Android ARM64
-        id: configure
-        continue-on-error: true
-        run: |
-          set -o pipefail
+      cmake -S "$SDK" \
+        -B "$BUILD" \
+        -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+        -DANDROID_ABI=arm64-v8a \
+        -DANDROID_PLATFORM=android-26 \
+        -DANDROID_STL=c++_shared \
+        -DREXGLUE_USE_VULKAN=ON \
+        -DREXGLUE_USE_D3D12=OFF \
+        -DREXGLUE_ENABLE_TRACY=OFF \
+        -DREXGLUE_BUILD_TESTS=OFF \
+        -DCMAKE_BUILD_TYPE=Release \
+        2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/configure.log"
 
-          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
-          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+  - name: Compile UI target if configuration succeeds
+    if: always()
+    continue-on-error: true
+    run: |
+      mkdir -p android-ui-probe
 
-          mkdir -p "$GITHUB_WORKSPACE/android-ui-probe"
+      if test -f android-ui-probe/sdk/build.ninja; then
+        set -o pipefail
+        cmake --build android-ui-probe/sdk \
+          --target rexui -- -k 0 \
+          2>&1 | tee android-ui-probe/build-ui.log
+      else
+        echo "No build.ninja generated; configure did not complete." \
+          > android-ui-probe/build-ui.log
+      fi
 
-          cmake -S "$SDK" \
-            -B "$GITHUB_WORKSPACE/android-ui-probe/sdk" \
-            -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-26 \
-            -DANDROID_STL=c++_shared \
-            -DREXGLUE_USE_VULKAN=ON \
-            -DREXGLUE_USE_D3D12=OFF \
-            -DREXGLUE_ENABLE_TRACY=OFF \
-            -DREXGLUE_BUILD_TESTS=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/configure.log"
+  - name: Generate diagnostic report
+    if: always()
+    run: |
+      {
+        echo "# Android ARM64 UI Patch Probe"
+        echo
+        echo "Diagnostic only. This workflow does not create an APK or include game data."
+        echo
+        echo "## Android and UI source references"
 
-      - name: Compile UI target if configuration succeeds
-        if: always()
-        continue-on-error: true
-        run: |
-          mkdir -p android-ui-probe
+        grep -RInE \
+          'AndroidNativeWindowSurface|surface_android|ANativeWindow|VK_KHR_android_surface|VK_USE_PLATFORM_ANDROID_KHR|surface_gnulinux|x11-xcb|wayland-client' \
+          third_party/rexglue-sdk/src/ui \
+          third_party/rexglue-sdk/include/rex/ui \
+          --exclude-dir=thirdparty 2>/dev/null | head -n 250 || true
 
-          if test -f android-ui-probe/sdk/build.ninja; then
-            cmake --build android-ui-probe/sdk \
-              --target rexui -- -k 0 \
-              2>&1 | tee android-ui-probe/build-ui.log
-          else
-            echo "No build.ninja generated; configure did not complete." \
-              > android-ui-probe/build-ui.log
-          fi
+        echo
+        echo "## CMake configure log"
 
-      - name: Generate diagnostic report
-        if: always()
-        run: |
-          {
-            echo "# Android ARM64 UI Patch Probe"
-            echo
-            echo "Diagnostic only. This workflow does not create an APK or include game data."
-            echo
-            echo "## Android and UI source references"
+        if test -f android-ui-probe/configure.log; then
+          tail -n 180 android-ui-probe/configure.log
+        else
+          echo "No configure log was generated."
+        fi
 
-            grep -RInE \
-              'AndroidNativeWindowSurface|surface_android|ANativeWindow|VK_KHR_android_surface|VK_USE_PLATFORM_ANDROID_KHR|surface_gnulinux|x11-xcb|wayland-client' \
-              third_party/rexglue-sdk/src/ui \
-              third_party/rexglue-sdk/include/rex/ui \
-              --exclude-dir=thirdparty 2>/dev/null | head -n 250 || true
+        echo
+        echo "## UI build log"
 
-            echo
-            echo "## CMake configure log"
+        if test -f android-ui-probe/build-ui.log; then
+          tail -n 220 android-ui-probe/build-ui.log
+        else
+          echo "No UI build log was generated."
+        fi
 
-            if test -f android-ui-probe/configure.log; then
-              tail -n 180 android-ui-probe/configure.log
-            else
-              echo "No configure log."
-            fi
+        echo
+        echo "## CMake source conditions"
 
-            echo
-            echo "## UI build log"
+        grep -nE \
+          'REXUI_PLATFORM_SOURCES|if\(UNIX AND NOT APPLE|find_package\(PkgConfig|x11-xcb|wayland-client' \
+          third_party/rexglue-sdk/src/ui/CMakeLists.txt || true
+      } > android-ui-patch-probe-report.md
 
-            if test -f android-ui-probe/build-ui.log; then
-              tail -n 220 android-ui-probe/build-ui.log
-            else
-              echo "No UI build log."
-            fi
-          } > android-ui-patch-probe-report.md
+      cat android-ui-patch-probe-report.md
 
-          cat android-ui-patch-probe-report.md
-
-      - name: Upload diagnostic report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-arm64-ui-patch-probe-report
-          path: |
-            android-ui-patch-probe-report.md
-            android-ui-probe/configure.log
-            android-ui-probe/build-ui.log
-          if-no-files-found: warn
+  - name: Upload diagnostic report
+    if: always()
+    uses: actions/upload-artifact@v4
+    with:
+      name: android-arm64-ui-patch-probe-report
+      path: |
+        android-ui-patch-probe-report.md
+        android-ui-probe/configure.log
+        android-ui-probe/build-ui.log
+      if-no-files-found: warn
