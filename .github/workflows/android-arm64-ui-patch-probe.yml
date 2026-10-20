@@ -237,6 +237,35 @@ jobs:
 
           exit 0
 
+          
+      - name: Configure full MCLA project for Android
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          BUILD="$GITHUB_WORKSPACE/android-ui-probe/full-mcla"
+
+          mkdir -p "$BUILD"
+
+          cmake -S "$GITHUB_WORKSPACE" \
+            -B "$BUILD" \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk" \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/full-mcla-configure.log"
+
+
       - name: Generate diagnostic report
         if: always()
         run: |
