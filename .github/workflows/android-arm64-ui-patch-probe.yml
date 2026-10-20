@@ -77,6 +77,44 @@ jobs:
           git apply ../../patches/rexglue-linux-procmap-query.patch
           git apply ../../patches/rexglue-linux-wait-sleep.patch
 
+      - name: Capture numeric header and platform detection diagnostics
+        if: always()
+        run: |
+          set +e
+          mkdir -p android-ui-probe
+
+          HEADER="third_party/rexglue-sdk/include/rex/string/numeric.h"
+          {
+            echo "Header path: $HEADER"
+            if test -f "$HEADER"; then
+              echo "Header exists. Showing lines 160-340:"
+              nl -ba "$HEADER" | sed -n '160,340p'
+            else
+              echo "Header not found at expected path. Searching SDK for numeric.h:"
+              find third_party/rexglue-sdk -type f -name 'numeric.h' -print
+            fi
+          } > android-ui-probe/numeric-header.txt 2>&1
+
+          {
+            echo "## Platform macros and from_chars usage"
+            grep -RInE 'REX_PLATFORM_LINUX|REX_PLATFORM_ANDROID|ANDROID|from_chars|numeric.h' \
+              third_party/rexglue-sdk/CMakeLists.txt \
+              third_party/rexglue-sdk/cmake \
+              third_party/rexglue-sdk/include/rex/string \
+              third_party/rexglue-sdk/src 2>/dev/null | head -n 300
+            echo
+            echo "## Compiler and CMake cache platform values"
+            if test -f android-ui-probe/sdk/CMakeCache.txt; then
+              grep -E 'CMAKE_SYSTEM_NAME:|CMAKE_CXX_COMPILER:|ANDROID_ABI:|ANDROID_PLATFORM:|CMAKE_ANDROID_NDK:' \
+                android-ui-probe/sdk/CMakeCache.txt
+            else
+              echo "CMakeCache.txt not available yet."
+            fi
+          } > android-ui-probe/platform-detection.txt 2>&1
+
+          cat android-ui-probe/numeric-header.txt
+          cat android-ui-probe/platform-detection.txt
+
       - name: Apply temporary Android UI CMake probe patch
         run: |
           set -euo pipefail
@@ -205,6 +243,22 @@ jobs:
               --exclude-dir=thirdparty 2>/dev/null | head -n 250 || true
 
             echo
+            echo "## Numeric header source (lines 160-340)"
+            if test -f android-ui-probe/numeric-header.txt; then
+              cat android-ui-probe/numeric-header.txt
+            else
+              echo "Numeric header diagnostic was not generated."
+            fi
+
+            echo
+            echo "## Platform detection diagnostic"
+            if test -f android-ui-probe/platform-detection.txt; then
+              cat android-ui-probe/platform-detection.txt
+            else
+              echo "Platform diagnostic was not generated."
+            fi
+
+            echo
             echo "## CMake configure log"
 
             if test -f android-ui-probe/configure.log; then
@@ -241,4 +295,6 @@ jobs:
             android-ui-patch-probe-report.md
             android-ui-probe/configure.log
             android-ui-probe/build-ui.log
+            android-ui-probe/numeric-header.txt
+            android-ui-probe/platform-detection.txt
           if-no-files-found: warn
