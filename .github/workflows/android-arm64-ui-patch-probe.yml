@@ -266,6 +266,47 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/full-mcla-configure.log"
 
 
+      - name: List and compile full MCLA target
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+
+          BUILD="$GITHUB_WORKSPACE/android-ui-probe/full-mcla"
+          mkdir -p android-ui-probe
+
+          if test ! -f "$BUILD/build.ninja"; then
+            echo "Build files missing; Android configuration did not generate Ninja files." \
+              > android-ui-probe/full-mcla-build.log
+
+            echo "MCLA build exit code: NOT_RUN" \
+              > android-ui-probe/full-mcla-build-status.txt
+            exit 0
+          fi
+
+          cmake --build "$BUILD" --target help \
+            2>&1 | tee android-ui-probe/full-mcla-targets.log
+
+          cmake --build "$BUILD" --target mcla -- -k 0 \
+            2>&1 | tee android-ui-probe/full-mcla-build.log
+
+          build_status=${PIPESTATUS[0]}
+
+          {
+            echo "MCLA build exit code: $build_status"
+            if [[ "$build_status" == "0" ]]; then
+              echo "MCLA target build: SUCCESS"
+            else
+              echo "MCLA target build: FAILURE"
+            fi
+          } > android-ui-probe/full-mcla-build-status.txt
+
+          exit 0
+
+
+
       - name: Generate diagnostic report
         if: always()
         run: |
@@ -343,4 +384,7 @@ jobs:
             android-ui-probe/build-status.txt
             android-ui-probe/numeric-header.txt
             android-ui-probe/platform-detection.txt
+            android-ui-probe/full-mcla-targets.log
+            android-ui-probe/full-mcla-build.log
+            android-ui-probe/full-mcla-build-status.txt
           if-no-files-found: warn
