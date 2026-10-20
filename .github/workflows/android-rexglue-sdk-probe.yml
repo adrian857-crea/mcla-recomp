@@ -59,6 +59,36 @@ jobs:
           fi
           git -C third_party/rexglue-sdk apply "$PATCH_FILE"
 
+      - name: Inspect the source of the x11-xcb dependency
+        shell: bash
+        run: |
+          set -u
+          SDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          echo "=== SDK revision ==="
+          git -C "$SDK_DIR" rev-parse HEAD || true
+          echo
+          echo "=== src/ui/CMakeLists.txt around the reported failing line ==="
+          if [ -f "$SDK_DIR/src/ui/CMakeLists.txt" ]; then
+            nl -ba "$SDK_DIR/src/ui/CMakeLists.txt" | sed -n '115,185p'
+          else
+            echo "File not found: $SDK_DIR/src/ui/CMakeLists.txt"
+          fi
+          echo
+          echo "=== Every x11-xcb / pkg_check_modules reference in SDK CMake files ==="
+          grep -RInE --include='CMakeLists.txt' --include='*.cmake' \
+            'x11-xcb|pkg_check_modules|ANDROID|CMAKE_SYSTEM_NAME' "$SDK_DIR/src" "$SDK_DIR/cmake" 2>/dev/null \
+            | head -n 300 || true
+          echo
+          echo "=== UI CMake conditionals and related options ==="
+          grep -RInE --include='CMakeLists.txt' --include='*.cmake' \
+            'if\s*\(|elseif\s*\(|option\(|BUILD_.*UI|ENABLE_.*UI|SDL|X11|WAYLAND' \
+            "$SDK_DIR/src/ui" "$SDK_DIR/CMakeLists.txt" 2>/dev/null | head -n 250 || true
+          echo
+          echo "=== Android toolchain facts ==="
+          echo "ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-unset}"
+          grep -E '^(CMAKE_SYSTEM_NAME|CMAKE_ANDROID_ARCH_ABI|ANDROID_ABI|ANDROID_PLATFORM):' \
+            "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" 2>/dev/null | head -n 30 || true
+
       - name: Configure SDK for Android arm64 (diagnostic only)
         id: configure
         shell: bash
@@ -72,34 +102,36 @@ jobs:
             -DANDROID_STL=c++_shared \
             -DREXGLUE_USE_VULKAN=ON \
             -DREXGLUE_ENABLE_TRACY=OFF \
+            --trace-source=third_party/rexglue-sdk/src/ui/CMakeLists.txt \
+            --trace-expand \
             2>&1 | tee android-sdk-configure.log
 
           result=${PIPESTATUS[0]}
           echo "cmake_exit_code=$result" >> "$GITHUB_OUTPUT"
-          if [ "$result" -eq 0 ]; then
-            echo "Android SDK CMake configuration succeeded."
-          else
-            echo "Android SDK CMake configuration failed; inspect the log artifact."
-          fi
-          exit 0
+          echo "CMake configuration exit code: $result"
+          exit "$result"
 
-      - name: Upload diagnostic log
+      - name: Upload diagnostic logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-rexglue-sdk-probe-log
-          path: android-sdk-configure.log
+          name: android-rexglue-sdk-diagnostics
+          path: |
+            android-sdk-configure.log
+            build/rexglue-android-arm64/CMakeCache.txt
           if-no-files-found: warn
 
       - name: Summarize result
         if: always()
         env:
           CMAKE_EXIT_CODE: ${{ steps.configure.outputs.cmake_exit_code }}
+        shell: bash
         run: |
           {
             echo "## Android ReXGlue SDK compatibility probe"
             echo ""
             echo "- CMake exit code: ${CMAKE_EXIT_CODE:-unknown}"
-            echo "- This only tests SDK configuration; it does not build MCLA or an APK."
+            echo "- This run only investigates SDK configuration; it does not build MCLA or an APK."
             echo "- Game data is not included or uploaded."
+            echo "- If configuration fails, inspect the artifact \`android-rexglue-sdk-diagnostics\`."
           } >> "$GITHUB_STEP_SUMMARY"
