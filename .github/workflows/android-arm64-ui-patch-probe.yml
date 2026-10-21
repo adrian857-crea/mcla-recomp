@@ -1,4 +1,3 @@
-
 name: Android ARM64 UI Patch Probe
 
 "on":
@@ -18,10 +17,16 @@ jobs:
           submodules: false
 
       - name: Install build tools
+        shell: bash
         run: |
+          set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build git python3 unzip clang libx11-xcb-dev libwayland-dev libc++-18-dev libc++abi-18-dev
+          sudo apt-get install -y \
+            cmake ninja-build git python3 unzip clang \
+            libx11-xcb-dev libwayland-dev libc++-18-dev libc++abi-18-dev
+
       - name: Install Android NDK
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -52,6 +57,7 @@ jobs:
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Clone my Android-enabled ReXGlue SDK
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -64,9 +70,10 @@ jobs:
 
           echo "=== Android surface source ==="
           grep -n -A 8 -B 4 'elseif(ANDROID)' \
-            third_party/rexglue-sdk/src/ui/CMakeLists.txt
+            third_party/rexglue-sdk/src/ui/CMakeLists.txt || true
 
       - name: Build native Linux codegen tool
+        shell: bash
         run: |
           set -euo pipefail
 
@@ -79,7 +86,7 @@ jobs:
             -G Ninja \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_CXX_FLAGS=-mssse3\ -stdlib=libc++ \
+            '-DCMAKE_CXX_FLAGS=-mssse3 -stdlib=libc++' \
             -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++ \
             -DCMAKE_BUILD_TYPE=Release \
             -DREXGLUE_USE_VULKAN=ON \
@@ -98,12 +105,14 @@ jobs:
           echo "Host codegen tool ready: $HOST_TOOL"
 
       - name: Skip MCLA patches for Android UI diagnostic
+        shell: bash
         run: |
           set -euo pipefail
           echo "Skipping MCLA-specific patches for this diagnostic."
           echo "Testing the Android-enabled ReXGlue fork."
 
-      - name: Patch floating-point parsing for Android NDK
+      - name: Verify Android floating-point parsing guards
+        shell: bash
         run: |
           set -euo pipefail
           HEADER="third_party/rexglue-sdk/include/rex/string/numeric.h"
@@ -113,35 +122,35 @@ jobs:
           from pathlib import Path
           import re
 
-          p = Path("third_party/rexglue-sdk/include/rex/string/numeric.h")
-          s = p.read_text()
+          path = Path("third_party/rexglue-sdk/include/rex/string/numeric.h")
+          source = path.read_text()
 
-          pattern = re.compile(
-              r"^#if REX_PLATFORM_MAC\s*$",
-              re.MULTILINE
+          if "portable_float_from_chars" not in source:
+              raise SystemExit("portable_float_from_chars was not found in numeric.h")
+
+          # The checked-in SDK already supports Android in the locale include,
+          # helper declaration, floating-point parser, and vec128 parser guards.
+          android_guards = re.findall(
+              r"^#if[^\n]*REX_PLATFORM_ANDROID[^\n]*$",
+              source,
+              re.MULTILINE,
           )
 
-          count = len(pattern.findall(s))
-
-          if count < 3:
+          if len(android_guards) < 4:
               raise SystemExit(
-                  f"Expected at least 3 exact MAC guards, found {count}; "
-                  "inspect numeric.h before changing it."
+                  "Expected at least 4 Android-aware preprocessor guards in "
+                  f"numeric.h, found {len(android_guards)}. Inspect the header "
+                  "instead of applying a blind replacement."
               )
 
-          s = pattern.sub(
-              "#if REX_PLATFORM_MAC || REX_PLATFORM_ANDROID",
-              s
-          )
-
-          p.write_text(s)
-          print(f"Updated {count} platform guards in {p}")
+          print(f"Verified {len(android_guards)} Android-aware guards in {path}.")
           PY
 
           grep -n -E 'REX_PLATFORM_MAC.*REX_PLATFORM_ANDROID|portable_float_from_chars|std::from_chars' "$HEADER"
 
       - name: Capture numeric header and platform detection diagnostics
         if: always()
+        shell: bash
         run: |
           set +e
           mkdir -p android-ui-probe
@@ -181,6 +190,7 @@ jobs:
       - name: Configure SDK for Android ARM64
         id: configure
         continue-on-error: true
+        shell: bash
         run: |
           set -o pipefail
 
@@ -267,7 +277,6 @@ jobs:
 
           exit 0
 
-          
       - name: Configure full MCLA project for Android
         if: always()
         continue-on-error: true
@@ -279,29 +288,36 @@ jobs:
           BUILD="$GITHUB_WORKSPACE/android-ui-probe/full-mcla"
 
           mkdir -p "$BUILD"
+          test -x "$REXGLUE_HOST_CODEGEN_EXECUTABLE"
 
-           test -x "$REXGLUE_HOST_CODEGEN_EXECUTABLE"
-
-           python3 - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path("generated/rexglue.cmake")
-           source = path.read_text()
+          if not path.is_file():
+              raise SystemExit(f"Required generated file not found: {path}")
 
-          old_command = 'COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml'
-          new_command = 'COMMAND "${REXGLUE_HOST_CODEGEN_EXECUTABLE}" codegen ${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml'
+          source = path.read_text()
 
-          if source.count(old_command) != 1:
+          old_command = (
+              "COMMAND $<TARGET_FILE:rex::rexglue> codegen "
+              "${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml"
+          )
+          new_command = (
+              'COMMAND "${REXGLUE_HOST_CODEGEN_EXECUTABLE}" codegen '
+              "${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml"
+          )
+
+          count = source.count(old_command)
+          if count != 1:
               raise SystemExit(
-                  "Expected exactly one ReXGlue codegen 
-                  command; refusing an unsafe patch."
-                      )
+                  "Expected exactly one ReXGlue codegen command in "
+                  f"{path}; found {count}. Refusing an unsafe patch."
+              )
 
-                  path.write_text(source.replace(old_command, 
-                  new_command, 1))
-                  print("Android build will use the native Linux 
-                  codegen tool.") 
-                  PY
+          path.write_text(source.replace(old_command, new_command, 1))
+          print("Patched generated/rexglue.cmake to use the native Linux codegen tool.")
+          PY
 
           cmake -S "$GITHUB_WORKSPACE" \
             -B "$BUILD" \
@@ -319,7 +335,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/full-mcla-configure.log"
 
-
       - name: List and compile full MCLA target
         if: always()
         continue-on-error: true
@@ -334,7 +349,6 @@ jobs:
           if test ! -f "$BUILD/build.ninja"; then
             echo "Build files missing; Android configuration did not generate Ninja files." \
               > android-ui-probe/full-mcla-build.log
-
             echo "MCLA build exit code: NOT_RUN" \
               > android-ui-probe/full-mcla-build-status.txt
             exit 0
@@ -359,10 +373,9 @@ jobs:
 
           exit 0
 
-
-
       - name: Generate diagnostic report
         if: always()
+        shell: bash
         run: |
           {
             echo "# Android ARM64 UI Patch Probe"
@@ -378,7 +391,6 @@ jobs:
 
             echo
             echo "## Android and UI source references"
-
             grep -RInE \
               'AndroidNativeWindowSurface|surface_android|ANativeWindow|VK_KHR_android_surface|VK_USE_PLATFORM_ANDROID_KHR|surface_gnulinux|x11-xcb|wayland-client' \
               third_party/rexglue-sdk/src/ui \
@@ -402,11 +414,11 @@ jobs:
             fi
 
             echo
-            echo "## CMake configure log"
+            echo "## SDK CMake configure log"
             if test -f android-ui-probe/configure.log; then
               tail -n 180 android-ui-probe/configure.log
             else
-              echo "No configure log was generated."
+              echo "No SDK configure log was generated."
             fi
 
             echo
@@ -415,6 +427,22 @@ jobs:
               tail -n 80 android-ui-probe/build-ui.log
             else
               echo "No UI build log was generated."
+            fi
+
+            echo
+            echo "## Full MCLA configure log"
+            if test -f android-ui-probe/full-mcla-configure.log; then
+              tail -n 180 android-ui-probe/full-mcla-configure.log
+            else
+              echo "No full MCLA configure log was generated."
+            fi
+
+            echo
+            echo "## Full MCLA build status"
+            if test -f android-ui-probe/full-mcla-build-status.txt; then
+              cat android-ui-probe/full-mcla-build-status.txt
+            else
+              echo "Full MCLA build status was not generated."
             fi
 
             echo
@@ -438,6 +466,7 @@ jobs:
             android-ui-probe/build-status.txt
             android-ui-probe/numeric-header.txt
             android-ui-probe/platform-detection.txt
+            android-ui-probe/full-mcla-configure.log
             android-ui-probe/full-mcla-targets.log
             android-ui-probe/full-mcla-build.log
             android-ui-probe/full-mcla-build-status.txt
