@@ -1,4 +1,5 @@
-name: Android APK Skeleton
+
+name: MCLA Android APK
 
 "on":
   workflow_dispatch:
@@ -27,7 +28,6 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      
       - name: Install Android SDK packages
         shell: bash
         env:
@@ -38,15 +38,14 @@ jobs:
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
 
           if ! command -v sdkmanager >/dev/null 2>&1; then
-            echo "sdkmanager was not found in the preinstalled Android SDK."
+            echo "sdkmanager was not found."
             exit 1
           fi
 
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
-
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Create minimal Android application
+      - name: Create Android application
         shell: bash
         run: |
           set -euo pipefail
@@ -102,8 +101,8 @@ jobs:
                   applicationId "com.centralgamer.mcla"
                   minSdk 26
                   targetSdk 35
-                  versionCode 1
-                  versionName "0.1.0"
+                  versionCode 2
+                  versionName "0.2.0"
 
                   ndk {
                       abiFilters "arm64-v8a"
@@ -153,51 +152,157 @@ jobs:
 
           import android.app.Activity
           import android.os.Bundle
+          import android.content.Intent
           import android.graphics.Color
+          import android.net.Uri
+          import android.provider.OpenableColumns
           import android.view.Gravity
           import android.widget.Button
           import android.widget.LinearLayout
+          import android.widget.ScrollView
           import android.widget.TextView
 
           class MainActivity : Activity() {
+
+              private lateinit var status: TextView
+
+              companion object {
+                  private const val PICK_FOLDER = 1001
+                  private const val PICK_FILE = 1002
+              }
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
                   val layout = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
-                      setPadding(32, 32, 32, 32)
+                      setPadding(28, 36, 28, 36)
                       setBackgroundColor(Color.rgb(18, 18, 24))
                   }
 
                   val title = TextView(this).apply {
                       text = "MCLA Android"
-                      textSize = 28f
+                      textSize = 30f
                       setTextColor(Color.WHITE)
                       gravity = Gravity.CENTER
                   }
 
-                  val status = TextView(this).apply {
-                      text = "Estrutura Android criada com sucesso!"
+                  val description = TextView(this).apply {
+                      text = "Selecione os arquivos do seu jogo"
                       textSize = 16f
                       setTextColor(Color.LTGRAY)
                       gravity = Gravity.CENTER
-                      setPadding(0, 24, 0, 24)
+                      setPadding(0, 20, 0, 20)
                   }
 
-                  val button = Button(this).apply {
-                      text = "Selecionar arquivos do jogo"
+                  status = TextView(this).apply {
+                      text = "Nenhuma pasta ou arquivo selecionado."
+                      textSize = 14f
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER
+                      setPadding(0, 12, 0, 24)
+                  }
+
+                  val folderButton = Button(this).apply {
+                      text = "Selecionar pasta do jogo"
                       setOnClickListener {
-                          status.text =
-                              "Seletor de arquivos será integrado na próxima etapa."
+                          val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                          startActivityForResult(intent, PICK_FOLDER)
                       }
                   }
 
-                  layout.addView(title)
-                  layout.addView(status)
-                  layout.addView(button)
+                  val fileButton = Button(this).apply {
+                      text = "Selecionar arquivo ISO / XEX"
+                      setOnClickListener {
+                          val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                              addCategory(Intent.CATEGORY_OPENABLE)
+                              type = "*/*"
+                          }
+                          startActivityForResult(intent, PICK_FILE)
+                      }
+                  }
 
-                  setContentView(layout)
+                  val note = TextView(this).apply {
+                      text = "Atenção: selecionar os arquivos ainda não inicia o jogo. Esta versão testa apenas a seleção."
+                      textSize = 13f
+                      setTextColor(Color.rgb(255, 190, 100))
+                      gravity = Gravity.CENTER
+                      setPadding(0, 24, 0, 0)
+                  }
+
+                  layout.addView(title)
+                  layout.addView(description)
+                  layout.addView(status)
+                  layout.addView(folderButton)
+                  layout.addView(fileButton)
+                  layout.addView(note)
+
+                  val scrollView = ScrollView(this)
+                  scrollView.addView(layout)
+                  setContentView(scrollView)
+              }
+
+              @Deprecated("Using onActivityResult for compatibility")
+              override fun onActivityResult(
+                  requestCode: Int,
+                  resultCode: Int,
+                  data: Intent?
+              ) {
+                  super.onActivityResult(requestCode, resultCode, data)
+
+                  if (resultCode != RESULT_OK || data?.data == null) {
+                      status.text = "Seleção cancelada. Você pode tentar novamente."
+                      return
+                  }
+
+                  val uri: Uri = data.data!!
+
+                  when (requestCode) {
+                      PICK_FOLDER -> {
+                          try {
+                              val flags = data.flags and (
+                                  Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                  Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                              )
+
+                              contentResolver.takePersistableUriPermission(uri, flags)
+                          } catch (_: SecurityException) {
+                              // A seleção ainda pode ser exibida nesta sessão.
+                          } catch (_: IllegalArgumentException) {
+                              // Alguns provedores não oferecem permissão persistente.
+                          }
+
+                          status.text = "Pasta selecionada!\n\n$uri\n\nPróximo passo: verificar os arquivos dentro dela."
+                      }
+
+                      PICK_FILE -> {
+                          val fileName = getFileName(uri)
+
+                          status.text = "Arquivo selecionado!\n\nNome: $fileName\n\nLocalização: $uri\n\nO conteúdo ainda não foi validado."
+                      }
+                  }
+              }
+
+              private fun getFileName(uri: Uri): String {
+                  var name = uri.lastPathSegment ?: "Arquivo selecionado"
+
+                  contentResolver.query(
+                      uri,
+                      arrayOf(OpenableColumns.DISPLAY_NAME),
+                      null,
+                      null,
+                      null
+                  )?.use { cursor ->
+                      if (cursor.moveToFirst()) {
+                          val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                          if (index >= 0) {
+                              name = cursor.getString(index) ?: name
+                          }
+                      }
+                  }
+
+                  return name
               }
           }
           EOF
@@ -206,6 +311,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --no-daemon \
             -p android-skeleton \
             assembleDebug
@@ -219,7 +325,8 @@ jobs:
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: mcla-android-skeleton-apk
+          name: mcla-android-file-picker-apk
           path: android-skeleton/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
+         
