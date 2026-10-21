@@ -1,0 +1,216 @@
+name: Android APK Skeleton
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Create minimal Android application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p android-skeleton/app/src/main/java/com/centralgamer/mcla
+
+          cat > android-skeleton/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "MCLAAndroid"
+          include(":app")
+          EOF
+
+          cat > android-skeleton/build.gradle <<'EOF'
+          plugins {
+              id "com.android.application" version "8.7.3" apply false
+              id "org.jetbrains.kotlin.android" version "2.0.21" apply false
+          }
+          EOF
+
+          cat > android-skeleton/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8
+          org.gradle.parallel=false
+          org.gradle.caching=true
+          android.useAndroidX=true
+          EOF
+
+          cat > android-skeleton/app/build.gradle <<'EOF'
+          plugins {
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
+          }
+
+          android {
+              namespace "com.centralgamer.mcla"
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId "com.centralgamer.mcla"
+                  minSdk 26
+                  targetSdk 35
+                  versionCode 1
+                  versionName "0.1.0"
+
+                  ndk {
+                      abiFilters "arm64-v8a"
+                  }
+              }
+
+              buildTypes {
+                  debug {
+                      applicationIdSuffix ".debug"
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          EOF
+
+          cat > android-skeleton/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="MCLA Android"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > android-skeleton/app/src/main/java/com/centralgamer/mcla/MainActivity.kt <<'EOF'
+          package com.centralgamer.mcla
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.view.Gravity
+          import android.widget.Button
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val layout = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(32, 32, 32, 32)
+                      setBackgroundColor(Color.rgb(18, 18, 24))
+                  }
+
+                  val title = TextView(this).apply {
+                      text = "MCLA Android"
+                      textSize = 28f
+                      setTextColor(Color.WHITE)
+                      gravity = Gravity.CENTER
+                  }
+
+                  val status = TextView(this).apply {
+                      text = "Estrutura Android criada com sucesso!"
+                      textSize = 16f
+                      setTextColor(Color.LTGRAY)
+                      gravity = Gravity.CENTER
+                      setPadding(0, 24, 0, 24)
+                  }
+
+                  val button = Button(this).apply {
+                      text = "Selecionar arquivos do jogo"
+                      setOnClickListener {
+                          status.text =
+                              "Seletor de arquivos será integrado na próxima etapa."
+                      }
+                  }
+
+                  layout.addView(title)
+                  layout.addView(status)
+                  layout.addView(button)
+
+                  setContentView(layout)
+              }
+          }
+          EOF
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon \
+            -p android-skeleton \
+            assembleDebug
+
+          APK="android-skeleton/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          echo "APK successfully generated: $APK"
+          ls -lh "$APK"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-skeleton-apk
+          path: android-skeleton/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
