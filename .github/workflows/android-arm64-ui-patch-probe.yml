@@ -354,8 +354,9 @@ jobs:
             exit 0
           fi
 
-          cmake --build "$BUILD" --target help \
-            2>&1 | tee android-ui-probe/full-mcla-targets.log
+          cmake --build "$BUILD" --target rexruntime rexui -- 
+          -k 0 \
+            2>&1 | tee android-ui-probe/full-mcla-build.log
 
           cmake --build "$BUILD" --target mcla -- -k 0 \
             2>&1 | tee android-ui-probe/full-mcla-build.log
