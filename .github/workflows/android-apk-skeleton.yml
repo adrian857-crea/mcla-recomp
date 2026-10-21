@@ -36,12 +36,6 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
-
-          if ! command -v sdkmanager >/dev/null 2>&1; then
-            echo "sdkmanager was not found."
-            exit 1
-          fi
-
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
@@ -49,7 +43,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p android-skeleton/app/src/main/java/com/centralgamer/mcla
 
           cat > android-skeleton/settings.gradle <<'EOF'
@@ -60,7 +53,6 @@ jobs:
                   gradlePluginPortal()
               }
           }
-
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
@@ -68,7 +60,6 @@ jobs:
                   mavenCentral()
               }
           }
-
           rootProject.name = "MCLAAndroid"
           include(":app")
           EOF
@@ -92,37 +83,34 @@ jobs:
               id "com.android.application"
               id "org.jetbrains.kotlin.android"
           }
-
           android {
               namespace "com.centralgamer.mcla"
               compileSdk 35
-
               defaultConfig {
                   applicationId "com.centralgamer.mcla"
                   minSdk 26
                   targetSdk 35
-                  versionCode 2
-                  versionName "0.2.0"
-
+                  versionCode 3
+                  versionName "0.3.0"
                   ndk {
                       abiFilters "arm64-v8a"
                   }
               }
-
               buildTypes {
                   debug {
                       applicationIdSuffix ".debug"
                   }
               }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
-
               kotlinOptions {
                   jvmTarget = "17"
               }
+          }
+          dependencies {
+              implementation "androidx.documentfile:documentfile:1.0.1"
           }
           EOF
 
@@ -132,16 +120,13 @@ jobs:
                   android:allowBackup="false"
                   android:label="MCLA Android"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
-
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
-
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
-
                   </activity>
               </application>
           </manifest>
@@ -161,14 +146,17 @@ jobs:
           import android.widget.LinearLayout
           import android.widget.ScrollView
           import android.widget.TextView
+          import androidx.documentfile.provider.DocumentFile
+          import java.util.Locale
 
           class MainActivity : Activity() {
-
               private lateinit var status: TextView
 
               companion object {
                   private const val PICK_FOLDER = 1001
                   private const val PICK_FILE = 1002
+                  private const val MAX_ITEMS = 600
+                  private const val MAX_DEPTH = 6
               }
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -189,7 +177,7 @@ jobs:
                   }
 
                   val description = TextView(this).apply {
-                      text = "Selecione os arquivos do seu jogo"
+                      text = "Selecione e verifique os arquivos do jogo"
                       textSize = 16f
                       setTextColor(Color.LTGRAY)
                       gravity = Gravity.CENTER
@@ -207,8 +195,10 @@ jobs:
                   val folderButton = Button(this).apply {
                       text = "Selecionar pasta do jogo"
                       setOnClickListener {
-                          val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
-                          startActivityForResult(intent, PICK_FOLDER)
+                          startActivityForResult(
+                              Intent(Intent.ACTION_OPEN_DOCUMENT_TREE),
+                              PICK_FOLDER
+                          )
                       }
                   }
 
@@ -224,7 +214,7 @@ jobs:
                   }
 
                   val note = TextView(this).apply {
-                      text = "Atenção: selecionar os arquivos ainda não inicia o jogo. Esta versão testa apenas a seleção."
+                      text = "Esta versão verifica nomes e informações básicas. Ainda não inicia o jogo."
                       textSize = 13f
                       setTextColor(Color.rgb(255, 190, 100))
                       gravity = Gravity.CENTER
@@ -256,32 +246,159 @@ jobs:
                       return
                   }
 
-                  val uri: Uri = data.data!!
-
+                  val uri = data.data!!
                   when (requestCode) {
-                      PICK_FOLDER -> {
-                          try {
-                              val flags = data.flags and (
-                                  Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                                  Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                              )
+                      PICK_FOLDER -> inspectFolder(uri, data)
+                      PICK_FILE -> inspectFile(uri)
+                  }
+              }
 
-                              contentResolver.takePersistableUriPermission(uri, flags)
-                          } catch (_: SecurityException) {
-                              // A seleção ainda pode ser exibida nesta sessão.
-                          } catch (_: IllegalArgumentException) {
-                              // Alguns provedores não oferecem permissão persistente.
+              private fun inspectFolder(uri: Uri, data: Intent) {
+                  try {
+                      val flags = data.flags and (
+                          Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                          Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                      )
+                      contentResolver.takePersistableUriPermission(uri, flags)
+                  } catch (_: SecurityException) {
+                  } catch (_: IllegalArgumentException) {
+                  }
+
+                  val root = DocumentFile.fromTreeUri(this, uri)
+                  if (root == null || !root.isDirectory) {
+                      status.text = "Não foi possível abrir essa pasta. Tente outra."
+                      return
+                  }
+
+                  val names = mutableListOf<String>()
+                  val xexFiles = mutableListOf<String>()
+                  val isoFiles = mutableListOf<String>()
+                  var count = 0
+                  var truncated = false
+
+                  fun walk(folder: DocumentFile, depth: Int) {
+                      if (depth > MAX_DEPTH || count >= MAX_ITEMS) {
+                          truncated = true
+                          return
+                      }
+
+                      val children = try {
+                          folder.listFiles()
+                      } catch (_: SecurityException) {
+                          emptyArray()
+                      }
+
+                      for (child in children) {
+                          if (count >= MAX_ITEMS) {
+                              truncated = true
+                              return
                           }
 
-                          status.text = "Pasta selecionada!\n\n$uri\n\nPróximo passo: verificar os arquivos dentro dela."
-                      }
+                          count++
+                          val name = child.name ?: "(sem nome)"
 
-                      PICK_FILE -> {
-                          val fileName = getFileName(uri)
+                          if (names.size < 30) {
+                              names.add(
+                                  (if (child.isDirectory) "[PASTA] " else "") + name
+                              )
+                          }
 
-                          status.text = "Arquivo selecionado!\n\nNome: $fileName\n\nLocalização: $uri\n\nO conteúdo ainda não foi validado."
+                          if (child.isFile) {
+                              val lower = name.lowercase(Locale.ROOT)
+                              if (lower.endsWith(".xex")) xexFiles.add(name)
+                              if (lower.endsWith(".iso")) isoFiles.add(name)
+                          } else if (child.isDirectory && depth < MAX_DEPTH) {
+                              walk(child, depth + 1)
+                          }
                       }
                   }
+
+                  walk(root, 0)
+
+                  val hasDefault = xexFiles.any {
+                      it.equals("default.xex", ignoreCase = true)
+                  }
+
+                  val report = StringBuilder()
+                  report.append("Pasta selecionada!\n")
+                  report.append("Itens encontrados: ").append(count).append("\n\n")
+                  report.append(
+                      if (hasDefault) "Encontrado: default.xex"
+                      else "Não encontrei default.xex"
+                  )
+                  report.append("\nArquivos XEX: ").append(xexFiles.size)
+                  report.append("\nArquivos ISO: ").append(isoFiles.size)
+                  report.append("\n\nPrimeiros itens:\n")
+                  report.append(
+                      if (names.isEmpty()) "(pasta vazia ou sem acesso aos itens)"
+                      else names.joinToString("\n")
+                  )
+
+                  if (truncated) {
+                      report.append("\n\nBusca limitada para evitar travamentos.")
+                  }
+
+                  report.append(
+                      "\n\nEncontrar arquivos não garante que o jogo seja compatível."
+                  )
+                  status.text = report.toString()
+              }
+
+              private fun inspectFile(uri: Uri) {
+                  val name = getFileName(uri)
+                  val lower = name.lowercase(Locale.ROOT)
+                  val size = getFileSize(uri)
+                  val report = StringBuilder()
+
+                  report.append("Arquivo selecionado\n\nNome: ").append(name)
+                  report.append("\nTamanho: ")
+                      .append(if (size >= 0) formatSize(size) else "não informado")
+                  report.append("\n\n")
+
+                  when {
+                      lower.endsWith(".xex") -> {
+                          val magicOk = try {
+                              contentResolver.openInputStream(uri)?.use { input ->
+                                  val bytes = ByteArray(4)
+                                  input.read(bytes) == 4 &&
+                                      bytes[0] == 'X'.code.toByte() &&
+                                      bytes[1] == 'E'.code.toByte() &&
+                                      bytes[2] == 'X'.code.toByte() &&
+                                      bytes[3] == '2'.code.toByte()
+                              } ?: false
+                          } catch (_: Exception) {
+                              false
+                          }
+
+                          report.append(
+                              if (magicOk) {
+                                  "Cabeçalho XEX2 encontrado. É uma verificação inicial, não completa."
+                              } else {
+                                  "Não foi possível confirmar o cabeçalho XEX2. O arquivo pode estar incompleto, ser de outro formato ou não permitir leitura."
+                              }
+                          )
+                      }
+
+                      lower.endsWith(".iso") -> {
+                          report.append(
+                              "Extensão ISO reconhecida. O formato e o conteúdo ainda precisam de validação específica."
+                          )
+                          if (size >= 0 && size % 2048L != 0L) {
+                              report.append(
+                                  "\nAviso: tamanho não é múltiplo de 2048 bytes; isso não confirma nem descarta compatibilidade."
+                              )
+                          }
+                      }
+
+                      else -> {
+                          report.append(
+                              "Extensão não reconhecida como ISO ou XEX. Selecione o arquivo correto."
+                          )
+                      }
+                  }
+
+                  report.append("\n\nA seleção ainda não inicia o jogo.")
+                  status.text = report.toString()
               }
 
               private fun getFileName(uri: Uri): String {
@@ -304,6 +421,40 @@ jobs:
 
                   return name
               }
+
+              private fun getFileSize(uri: Uri): Long {
+                  return try {
+                      contentResolver.query(
+                          uri,
+                          arrayOf(OpenableColumns.SIZE),
+                          null,
+                          null,
+                          null
+                      )?.use { cursor ->
+                          if (cursor.moveToFirst()) {
+                              val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                              if (index >= 0 && !cursor.isNull(index)) {
+                                  cursor.getLong(index)
+                              } else -1L
+                          } else -1L
+                      } ?: -1L
+                  } catch (_: Exception) {
+                      -1L
+                  }
+              }
+
+              private fun formatSize(bytes: Long): String {
+                  if (bytes < 1024L) return "$bytes bytes"
+                  val kb = bytes / 1024.0
+                  if (kb < 1024.0) {
+                      return String.format(Locale.ROOT, "%.1f KB", kb)
+                  }
+                  val mb = kb / 1024.0
+                  if (mb < 1024.0) {
+                      return String.format(Locale.ROOT, "%.1f MB", mb)
+                  }
+                  return String.format(Locale.ROOT, "%.2f GB", mb / 1024.0)
+              }
           }
           EOF
 
@@ -311,22 +462,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          gradle --no-daemon \
-            -p android-skeleton \
-            assembleDebug
-
+          gradle --no-daemon -p android-skeleton assembleDebug
           APK="android-skeleton/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-
           echo "APK successfully generated: $APK"
           ls -lh "$APK"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: mcla-android-file-picker-apk
+          name: mcla-android-file-checker-apk
           path: android-skeleton/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 7
-         
