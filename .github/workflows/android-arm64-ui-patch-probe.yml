@@ -20,7 +20,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build git python3 unzip
+          sudo apt-get install -y cmake ninja-build git python3 unzip clang
 
       - name: Install Android NDK
         run: |
@@ -66,6 +66,35 @@ jobs:
           echo "=== Android surface source ==="
           grep -n -A 8 -B 4 'elseif(ANDROID)' \
             third_party/rexglue-sdk/src/ui/CMakeLists.txt
+
+      - name: Build native Linux codegen tool
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          BUILD="$GITHUB_WORKSPACE/android-ui-probe/host-sdk"
+          mkdir -p "$GITHUB_WORKSPACE/android-ui-probe"
+
+          cmake -S "$SDK" \
+            -B "$BUILD" \
+            -G Ninja \
+            -DCMAKE_C_COMPILER=clang \
+            -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF \
+            2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/host-codegen-configure.log"
+
+          cmake --build "$BUILD" --target rexglue --parallel 2 \
+            2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/host-codegen-build.log"
+
+          HOST_TOOL="$SDK/out/linux-amd64/rexglue"
+          test -x "$HOST_TOOL"
+
+          echo "REXGLUE_HOST_CODEGEN_EXECUTABLE=$HOST_TOOL" >> "$GITHUB_ENV"
+          echo "Host codegen tool ready: $HOST_TOOL"
 
       - name: Skip MCLA patches for Android UI diagnostic
         run: |
@@ -250,6 +279,29 @@ jobs:
 
           mkdir -p "$BUILD"
 
+           test -x "$REXGLUE_HOST_CODEGEN_EXECUTABLE"
+
+           python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("generated/rexglue.cmake")
+           source = path.read_text()
+
+          old_command = 'COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml'
+          new_command = 'COMMAND "${REXGLUE_HOST_CODEGEN_EXECUTABLE}" codegen ${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml'
+
+          if source.count(old_command) != 1:
+              raise SystemExit(
+                  "Expected exactly one ReXGlue codegen 
+                  command; refusing an unsafe patch."
+                      )
+
+                  path.write_text(source.replace(old_command, 
+                  new_command, 1))
+                  print("Android build will use the native Linux 
+                  codegen tool.") 
+                  PY
+
           cmake -S "$GITHUB_WORKSPACE" \
             -B "$BUILD" \
             -G Ninja \
@@ -258,6 +310,7 @@ jobs:
             -DANDROID_PLATFORM=android-26 \
             -DANDROID_STL=c++_shared \
             -DREXSDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk" \
+            -DREXGLUE_HOST_CODEGEN_EXECUTABLE="$REXGLUE_HOST_CODEGEN_EXECUTABLE" \
             -DREXGLUE_USE_VULKAN=ON \
             -DREXGLUE_USE_D3D12=OFF \
             -DREXGLUE_ENABLE_TRACY=OFF \
