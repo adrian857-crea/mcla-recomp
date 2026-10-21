@@ -20,8 +20,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build git python3 unzip clang
-
+          sudo apt-get install -y cmake ninja-build git python3 unzip clang libx11-xcb-dev
       - name: Install Android NDK
         run: |
           set -euo pipefail
