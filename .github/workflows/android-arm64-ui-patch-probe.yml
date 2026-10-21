@@ -20,7 +20,7 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build git python3 unzip clang libx11-xcb-dev libwayland-dev
+          sudo apt-get install -y cmake ninja-build git python3 unzip clang libx11-xcb-dev libwayland-dev libc++-18-dev libc++abi-18-dev
       - name: Install Android NDK
         run: |
           set -euo pipefail
@@ -79,7 +79,8 @@ jobs:
             -G Ninja \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
-            -DCMAKE_CXX_FLAGS=-mssse3 \
+            -DCMAKE_CXX_FLAGS=-mssse3\ -stdlib=libc++ \
+            -DCMAKE_EXE_LINKER_FLAGS=-stdlib=libc++ \
             -DCMAKE_BUILD_TYPE=Release \
             -DREXGLUE_USE_VULKAN=ON \
             -DREXGLUE_USE_D3D12=OFF \
