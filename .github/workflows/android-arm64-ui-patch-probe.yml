@@ -79,6 +79,7 @@ jobs:
             -G Ninja \
             -DCMAKE_C_COMPILER=clang \
             -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_CXX_FLAGS=-mssse3 \
             -DCMAKE_BUILD_TYPE=Release \
             -DREXGLUE_USE_VULKAN=ON \
             -DREXGLUE_USE_D3D12=OFF \
