@@ -1,0 +1,237 @@
+
+name: MCLA Android Native Package Probe
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build git python3 unzip clang libc++-18-dev libc++abi-18-dev libx11-xcb-dev libwayland-dev
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fSL \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -o "$RUNNER_TEMP/cmdline-tools.zip"
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
+          mkdir -p "$SDK/cmdline-tools/latest"
+          mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* "$SDK/cmdline-tools/latest/"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - name: Clone Android-enabled ReXGlue
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p third_party
+          git clone --recursive \
+            https://github.com/adrian857-crea/rexglue-sdk.git \
+            third_party/rexglue-sdk
+          git -C third_party/rexglue-sdk log -1 --oneline
+
+      - name: Configure ReXGlue for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
+          mkdir -p "$BUILD"
+
+          cmake -S "$SDK" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF
+
+      - name: Compile native runtime and UI objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
+          cmake --build "$BUILD" --target rexruntime rexui --parallel 2
+
+          echo "=== Shared libraries generated ==="
+          find "$BUILD" -type f -name '*.so' -print
+
+          RUNTIME="$(find "$BUILD" -type f -name 'librexruntime.so' -print -quit)"
+          test -n "$RUNTIME"
+          echo "REX_RUNTIME=$RUNTIME" >> "$GITHUB_ENV"
+
+      - name: Prepare Android APK project
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$GITHUB_WORKSPACE/android-package-probe"
+          JNI="$APP/app/src/main/jniLibs/arm64-v8a"
+          mkdir -p "$APP/app/src/main/java/com/centralgamer/mcla" "$JNI"
+
+          cp "$REX_RUNTIME" "$JNI/"
+          find "$(dirname "$REX_RUNTIME")" -maxdepth 1 -type f -name '*.so' \
+            ! -name 'librexruntime.so' -exec cp -n {} "$JNI/" \;
+
+          CXX="$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+          test -f "$CXX"
+          cp "$CXX" "$JNI/"
+
+          cat > "$APP/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "MCLANativePackageProbe"
+          include(":app")
+          EOF
+
+          cat > "$APP/build.gradle" <<'EOF'
+          plugins {
+              id "com.android.application" version "8.7.3" apply false
+              id "org.jetbrains.kotlin.android" version "2.0.21" apply false
+          }
+          EOF
+
+          cat > "$APP/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8
+          org.gradle.parallel=false
+          android.useAndroidX=true
+          EOF
+
+          cat > "$APP/app/build.gradle" <<'EOF'
+          plugins {
+              id "com.android.application"
+              id "org.jetbrains.kotlin.android"
+          }
+          android {
+              namespace "com.centralgamer.mcla"
+              compileSdk 35
+              defaultConfig {
+                  applicationId "com.centralgamer.mcla"
+                  minSdk 26
+                  targetSdk 35
+                  versionCode 4
+                  versionName "0.4.0-native-probe"
+                  ndk { abiFilters "arm64-v8a" }
+              }
+              buildTypes { debug { applicationIdSuffix ".debug" } }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+
+          cat > "$APP/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:allowBackup="false"
+                  android:label="MCLA Native Probe"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$APP/app/src/main/java/com/centralgamer/mcla/MainActivity.kt" <<'EOF'
+          package com.centralgamer.mcla
+
+          import android.app.Activity
+          import android.os.Bundle
+          import android.graphics.Color
+          import android.view.Gravity
+          import android.widget.LinearLayout
+          import android.widget.TextView
+
+          class MainActivity : Activity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      gravity = Gravity.CENTER
+                      setPadding(24, 32, 24, 32)
+                      setBackgroundColor(Color.rgb(18, 18, 24))
+                  }
+                  root.addView(TextView(this).apply {
+                      text = "MCLA Android"
+                      textSize = 30f
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.WHITE)
+                  })
+                  root.addView(TextView(this).apply {
+                      text = "Teste de bibliotecas nativas ARM64\n\nEste APK verifica o empacotamento do ReXGlue.\n\nO jogo ainda não é iniciado por esta versão."
+                      textSize = 16f
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.LTGRAY)
+                      setPadding(0, 24, 0, 0)
+                  })
+                  setContentView(root)
+              }
+          }
+          EOF
+
+          echo "=== Bibliotecas preparadas ==="
+          ls -lh "$JNI"
+
+      - name: Build and verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon -p android-package-probe assembleDebug
+          APK="android-package-probe/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p native-package-probe/results
+          cp "$APK" native-package-probe/results/mcla-native-package-probe.apk
+          unzip -l "$APK" | tee native-package-probe/results/apk-contents.txt
+
+          grep -q 'lib/arm64-v8a/librexruntime.so' native-package-probe/results/apk-contents.txt
+          grep -q 'lib/arm64-v8a/libc++_shared.so' native-package-probe/results/apk-contents.txt
+          echo "SUCCESS: runtime and C++ runtime are packaged in the APK."
+
+      - name: Upload APK and build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-native-package-probe
+          path: |
+            native-package-probe/results/
+            native-package-probe/android-sdk/CMakeCache.txt
+          if-no-files-found: warn
+          retention-days: 7
