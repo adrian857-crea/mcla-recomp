@@ -27,15 +27,24 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
+      
       - name: Install Android SDK packages
         shell: bash
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
           set -euo pipefail
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses >/dev/null || true
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            echo "sdkmanager was not found in the preinstalled Android SDK."
+            exit 1
+          fi
+
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Create minimal Android application
         shell: bash
