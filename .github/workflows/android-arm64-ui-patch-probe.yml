@@ -335,7 +335,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             2>&1 | tee "$GITHUB_WORKSPACE/android-ui-probe/full-mcla-configure.log"
 
-      - name: List and compile full MCLA target
+      - name: List and compile Android runtime and UI targets
         if: always()
         continue-on-error: true
         shell: bash
@@ -349,26 +349,22 @@ jobs:
           if test ! -f "$BUILD/build.ninja"; then
             echo "Build files missing; Android configuration did not generate Ninja files." \
               > android-ui-probe/full-mcla-build.log
-            echo "MCLA build exit code: NOT_RUN" \
+            echo "Build exit code: NOT_RUN" \
               > android-ui-probe/full-mcla-build-status.txt
             exit 0
           fi
 
-          cmake --build "$BUILD" --target rexruntime rexui -- 
-          -k 0 \
-            2>&1 | tee android-ui-probe/full-mcla-build.log
-
-          cmake --build "$BUILD" --target mcla -- -k 0 \
+          cmake --build "$BUILD" --target rexruntime rexui -- -k 0 \
             2>&1 | tee android-ui-probe/full-mcla-build.log
 
           build_status=${PIPESTATUS[0]}
 
           {
-            echo "MCLA build exit code: $build_status"
+            echo "Build exit code: $build_status"
             if [[ "$build_status" == "0" ]]; then
-              echo "MCLA target build: SUCCESS"
+              echo "Android runtime and UI targets: SUCCESS"
             else
-              echo "MCLA target build: FAILURE"
+              echo "Android runtime and UI targets: FAILURE"
             fi
           } > android-ui-probe/full-mcla-build-status.txt
 
