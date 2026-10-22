@@ -54,6 +54,7 @@ jobs:
           git -C third_party/rexglue-sdk log -1 --oneline
 
       
+      
       - name: Disable FFmpeg ARM64 assembly for probe
         shell: bash
         run: |
@@ -63,45 +64,42 @@ jobs:
 
           python3 - "$FILE" <<'PY'
           import pathlib
-          import re
           import sys
 
           path = pathlib.Path(sys.argv[1])
           source = path.read_text()
 
-          # Remove arquivos Assembly ARM64 do FFmpeg da lista de fontes.
-          assembly_pattern = (
-              r'^[ \t]*\$\{FFMPEG_DIR\}/'
-              r'libav(?:util|codec)/aarch64/[^ \t\n]+\.S[ \t]*,?[ \t]*\n'
-          )
+          replacements = [
+              (
+                  "# ARM64 optimizations for libavutil\n"
+                  "if(IS_ARM64)",
+                  "# ARM64 optimizations for libavutil\n"
+                  "if(IS_ARM64 AND NOT ANDROID)",
+              ),
+              (
+                  "# ARM64 optimizations for libavcodec\n"
+                  "if(IS_ARM64)",
+                  "# ARM64 optimizations for libavcodec\n"
+                  "if(IS_ARM64 AND NOT ANDROID)",
+              ),
+          ]
 
-          updated, removed = re.subn(
-              assembly_pattern,
-              "",
-              source,
-              flags=re.MULTILINE,
-          )
+          updated = source
 
-          # Evita habilitar macros que declaram implementações NEON
-          # quando as respectivas fontes Assembly não estão compiladas.
-          updated = updated.replace("HAVE_NEON=1", "HAVE_NEON=0")
-          updated = updated.replace("HAVE_ARMV8=1", "HAVE_ARMV8=0")
+          for old, new in replacements:
+              count = updated.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"Esperava encontrar exatamente uma ocorrência: "
+                      f"{old.splitlines()[0]} — encontrei {count}."
+                  )
+              updated = updated.replace(old, new, 1)
 
-          if updated == source:
-              print(
-                  "AVISO: não houve alterações no CMakeLists.txt; "
-                  "a lista de fontes precisa ser inspecionada."
-              )
-          else:
-              path.write_text(updated)
+          path.write_text(updated)
 
-          print(
-              f"Arquivos Assembly ARM64 removidos: {removed}"
-          )
-          print(
-              "Patch de teste aplicado; será necessário verificar "
-              "se as fontes C também dependem dessas funções."
-          )
+          print("Bloco ARM64 do libavutil desativado para Android.")
+          print("Bloco ARM64 do libavcodec desativado para Android.")
+          print("As fontes genéricas do FFmpeg serão usadas no teste.")
           PY
 
 
