@@ -108,7 +108,7 @@ jobs:
           source = path.read_text()
 
           old = '"<CMAKE_ASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
-          new = '"<CMAKE_ASM_COMPILER> --target=aarch64-linux-android26 <DEFINES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+          new = '"<CMAKE_ASM_COMPILER> --target=aarch64-linux-android26 <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
 
           if old not in source:
               if new in source:
