@@ -52,8 +52,6 @@ jobs:
             https://github.com/adrian857-crea/rexglue-sdk.git \
             third_party/rexglue-sdk
           git -C third_party/rexglue-sdk log -1 --oneline
-
-      
       
       
       - name: Configure FFmpeg ARM64 sources for Android probe
@@ -65,26 +63,17 @@ jobs:
 
           python3 - "$FILE" <<'PY'
           import pathlib
+          import re
           import sys
 
           path = pathlib.Path(sys.argv[1])
           source = path.read_text()
 
-          old_util = """# ARM64 optimizations for libavutil
-          if(IS_ARM64 AND NOT ANDROID)
-              target_sources(libavutil PRIVATE
-                  ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
-                  ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_init.c
-                  ${FFMPEG_DIR}/libavutil/aarch64/float_dsp_neon.S
-              )
-              target_compile_definitions(libavutil PRIVATE
-                  HAVE_NEON=1
-                  HAVE_ARMV8=1
-                  HAVE_INLINE_ASM=1
-              )
-          endif()"""
-
-          new_util = """# ARM64 initialization for libavutil; generic routines on Android
+          replacements = [
+              (
+                  "libavutil",
+                  r"# ARM64 optimizations for libavutil\s*\nif\(IS_ARM64\).*?\nendif\(\)",
+                  """# ARM64 initialization for libavutil
           if(IS_ARM64)
               target_sources(libavutil PRIVATE
                   ${FFMPEG_DIR}/libavutil/aarch64/cpu.c
@@ -107,27 +96,11 @@ jobs:
                   )
               endif()
           endif()"""
-
-          old_codec = """# ARM64 optimizations for libavcodec
-          if(IS_ARM64 AND NOT ANDROID)
-              target_sources(libavcodec PRIVATE
-                  ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
-                  ${FFMPEG_DIR}/libavcodec/aarch64/fft_neon.S
-                  ${FFMPEG_DIR}/libavcodec/aarch64/mdct_neon.S
-                  ${FFMPEG_DIR}/libavcodec/aarch64/simple_idct_neon.S
-                  ${FFMPEG_DIR}/libavcodec/aarch64/videodsp.S
-                  ${FFMPEG_DIR}/libavcodec/aarch64/neon.S
-                  ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_init.c
-                  ${FFMPEG_DIR}/libavcodec/aarch64/mpegaudiodsp_neon.S
-              )
-              target_compile_definitions(libavcodec PRIVATE
-                  HAVE_NEON=1
-                  HAVE_ARMV8=1
-                  HAVE_INLINE_ASM=1
-              )
-          endif()"""
-
-          new_codec = """# ARM64 initialization for libavcodec; generic routines on Android
+              ),
+              (
+                  "libavcodec",
+                  r"# ARM64 optimizations for libavcodec\s*\nif\(IS_ARM64\).*?\nendif\(\)",
+                  """# ARM64 initialization for libavcodec
           if(IS_ARM64)
               target_sources(libavcodec PRIVATE
                   ${FFMPEG_DIR}/libavcodec/aarch64/fft_init_aarch64.c
@@ -155,24 +128,26 @@ jobs:
                   )
               endif()
           endif()"""
+              ),
+          ]
 
-          for label, old, new in [
-              ("libavutil", old_util, new_util),
-              ("libavcodec", old_codec, new_codec),
-          ]:
-              if source.count(old) != 1:
+          for name, pattern, replacement in replacements:
+              source, count = re.subn(
+                  pattern, lambda _: replacement, source, count=1,
+                  flags=re.DOTALL
+              )
+              if count != 1:
                   raise SystemExit(
-                      f"Bloco esperado de {label} não encontrado exatamente uma vez. "
+                      f"Bloco ARM64 de {name} não encontrado. "
                       "Nenhuma alteração foi gravada."
                   )
-              source = source.replace(old, new, 1)
 
           path.write_text(source)
-          print("Inicializadores C ARM64 mantidos.")
-          print("Assembly NEON desativado somente para Android.")
-          print("Outras plataformas mantêm suas otimizações.")
+          print("Inicializadores C ARM64 preservados.")
+          print("Assembly NEON desativado para Android nesta sondagem.")
+          print("Blocos FFmpeg atualizados com sucesso.")
           PY
-
+           
       
       - name: Configure ReXGlue for Android ARM64
         shell: bash
