@@ -208,8 +208,8 @@ jobs:
                   applicationId "com.centralgamer.mcla"
                   minSdk 26
                   targetSdk 35
-                  versionCode 5
-                  versionName "0.5.0-native-load-test"
+                  versionCode 6
+                  versionName "0.6.0-native-manual-test"
                   ndk { abiFilters "arm64-v8a" }
               }
 
@@ -228,7 +228,8 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application
                   android:allowBackup="false"
-                  android:label="MCLA Native Load Test"
+                  android:extractNativeLibs="true"
+                  android:label="MCLA Native Load Test 0.6"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
                   <activity
                       android:name=".MainActivity"
@@ -249,21 +250,23 @@ jobs:
           import android.os.Bundle
           import android.graphics.Color
           import android.view.Gravity
+          import android.view.View
+          import android.widget.Button
           import android.widget.LinearLayout
+          import android.widget.ScrollView
           import android.widget.TextView
 
           class MainActivity : Activity() {
+
+              private lateinit var statusText: TextView
+              private lateinit var testButton: Button
+              private var loadAttempted = false
+
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
 
-                  val result = try {
-                      System.loadLibrary("rexruntime")
-                      "SUCESSO!\n\nO Android carregou a biblioteca nativa."
-                  } catch (e: Throwable) {
-                      "FALHA AO CARREGAR\n\n" +
-                          "${e.javaClass.simpleName}\n" +
-                          "${e.message ?: "Sem detalhes"}"
-                  }
+                  window.statusBarColor = Color.rgb(18, 18, 24)
+                  window.navigationBarColor = Color.rgb(18, 18, 24)
 
                   val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
@@ -272,34 +275,88 @@ jobs:
                       setBackgroundColor(Color.rgb(18, 18, 24))
                   }
 
-                  root.addView(TextView(this).apply {
+                  val title = TextView(this).apply {
                       text = "MCLA Android"
-                      textSize = 30f
+                      textSize = 28f
                       gravity = Gravity.CENTER
                       setTextColor(Color.WHITE)
-                  })
+                  }
 
-                  root.addView(TextView(this).apply {
-                      text = "Teste de carregamento nativo ARM64"
-                      textSize = 17f
+                  val subtitle = TextView(this).apply {
+                      text = "Teste de inicialização ARM64"
+                      textSize = 16f
                       gravity = Gravity.CENTER
                       setTextColor(Color.LTGRAY)
-                      setPadding(0, 24, 0, 16)
-                  })
+                      setPadding(0, 20, 0, 28)
+                  }
 
-                  root.addView(TextView(this).apply {
-                      text = result
-                      textSize = 15f
+                  statusText = TextView(this).apply {
+                      text = "APP ABERTO!\\n\\nA biblioteca nativa ainda NÃO foi carregada.\\n\\nToque no botão abaixo para testar."
+                      textSize = 16f
                       gravity = Gravity.CENTER
-                      setTextColor(
-                          if (result.startsWith("SUCESSO"))
-                              Color.rgb(100, 230, 140)
-                          else
-                              Color.rgb(255, 130, 130)
-                      )
-                  })
+                      setTextColor(Color.WHITE)
+                      setPadding(0, 8, 0, 24)
+                  }
 
-                  setContentView(root)
+                  testButton = Button(this).apply {
+                      text = "Testar carregamento nativo"
+                      isAllCaps = false
+                      setOnClickListener {
+                          testNativeLibrary()
+                      }
+                  }
+
+                  val note = TextView(this).apply {
+                      text = "Este teste verifica o carregamento da biblioteca. Ele ainda não inicia o jogo."
+                      textSize = 13f
+                      gravity = Gravity.CENTER
+                      setTextColor(Color.LTGRAY)
+                      setPadding(0, 24, 0, 0)
+                  }
+
+                  root.addView(title)
+                  root.addView(subtitle)
+                  root.addView(statusText)
+                  root.addView(testButton)
+                  root.addView(note)
+
+                  val scroll = ScrollView(this).apply {
+                      isFillViewport = true
+                      addView(root)
+                  }
+
+                  setContentView(scroll)
+              }
+
+              private fun testNativeLibrary() {
+                  if (loadAttempted) {
+                      statusText.text =
+                          "O teste de carregamento já foi executado nesta sessão."
+                      return
+                  }
+
+                  loadAttempted = true
+                  testButton.isEnabled = false
+                  statusText.text = "Testando carregamento... aguarde."
+                  statusText.setTextColor(Color.YELLOW)
+
+                  try {
+                      System.loadLibrary("rexruntime")
+
+                      statusText.text =
+                          "CARREGAMENTO CONCLUÍDO!\\n\\n" +
+                          "O Android carregou librexruntime.so sem lançar uma exceção.\\n\\n" +
+                          "Isso ainda não significa que o jogo está funcionando."
+
+                      statusText.setTextColor(Color.rgb(100, 230, 140))
+                  } catch (e: Throwable) {
+                      statusText.text =
+                          "FALHA AO CARREGAR A BIBLIOTECA\\n\\n" +
+                          "Tipo: ${e.javaClass.name}\\n\\n" +
+                          "Detalhes: ${e.message ?: "Sem detalhes disponíveis"}"
+
+                      statusText.setTextColor(Color.rgb(255, 130, 130))
+                  }
               }
           }
           EOF
@@ -333,3 +390,4 @@ jobs:
             native-package-probe/android-sdk/CMakeCache.txt
           if-no-files-found: warn
           retention-days: 7
+
