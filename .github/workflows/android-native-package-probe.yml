@@ -53,6 +53,43 @@ jobs:
             third_party/rexglue-sdk
           git -C third_party/rexglue-sdk log -1 --oneline
 
+      - name: Disable FFmpeg ARM64 assembly for probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="third_party/rexglue-sdk/thirdparty/CMakeLists.txt"
+
+          python3 - "$FILE" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          source = path.read_text()
+
+          assembly_pattern = (
+              r'^[ \t]*\$\{FFMPEG_DIR\}/libav(?:util|codec)'
+              r'/aarch64/[^ \t\n]+\.S[ \t]*\n'
+          )
+
+          updated, removed = re.subn(
+              assembly_pattern, "", source, flags=re.MULTILINE
+          )
+
+          if removed == 0:
+              raise SystemExit(
+                  "Nenhum arquivo Assembly ARM64 do FFmpeg foi encontrado. "
+                  "Verifique o CMakeLists.txt."
+              )
+
+          updated = updated.replace("HAVE_NEON=1", "HAVE_NEON=0")
+          updated = updated.replace("HAVE_ARMV8=1", "HAVE_ARMV8=0")
+
+          path.write_text(updated)
+          print(f"Arquivos Assembly do FFmpeg removidos do teste: {removed}")
+          print("O teste usará as implementações genéricas do FFmpeg.")
+          PY
+
       
       - name: Configure ReXGlue for Android ARM64
         shell: bash
