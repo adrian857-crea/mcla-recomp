@@ -53,6 +53,7 @@ jobs:
             third_party/rexglue-sdk
           git -C third_party/rexglue-sdk log -1 --oneline
 
+      
       - name: Configure ReXGlue for Android ARM64
         shell: bash
         run: |
@@ -61,6 +62,29 @@ jobs:
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
           mkdir -p "$BUILD"
+
+          python3 - "$SDK/CMakeLists.txt" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          source = path.read_text()
+
+          old = '"<CMAKE_ASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+          new = '"<CMAKE_ASM_COMPILER> --target=aarch64-linux-android26 <DEFINES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+
+          if old not in source:
+              if new in source:
+                  print("Ajuste de assembly já aplicado.")
+              else:
+                  raise SystemExit(
+                      "Não encontrei a regra de assembly esperada. "
+                      "Nenhuma alteração foi feita."
+                  )
+          else:
+              path.write_text(source.replace(old, new, 1))
+              print("Regra de assembly ARM64 corrigida para este teste.")
+          PY
 
           cmake -S "$SDK" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
@@ -73,19 +97,30 @@ jobs:
             -DREXGLUE_ENABLE_TRACY=OFF \
             -DREXGLUE_BUILD_TESTS=OFF
 
+      
       - name: Compile native runtime and UI objects
         shell: bash
         run: |
           set -euo pipefail
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
+
           cmake --build "$BUILD" --target rexruntime rexui --parallel 2
 
-          echo "=== Shared libraries generated ==="
-          find "$BUILD" -type f -name '*.so' -print
+          echo "=== Bibliotecas nativas geradas ==="
+          find "$SDK/out/android-arm64" -type f -name '*.so' -print
 
-          RUNTIME="$(find "$BUILD" -type f -name 'librexruntime.so' -print -quit)"
-          test -n "$RUNTIME"
+          RUNTIME="$(find "$SDK/out/android-arm64" -type f -name 'librexruntime.so' -print -quit)"
+          if [ -z "$RUNTIME" ]; then
+            echo "ERRO: librexruntime.so não foi encontrada."
+            echo "Conteúdo do diretório de saída:"
+            find "$SDK/out" -maxdepth 4 -type f -print || true
+            exit 1
+          fi
+
           echo "REX_RUNTIME=$RUNTIME" >> "$GITHUB_ENV"
+          echo "Runtime encontrado: $RUNTIME"
+
 
       - name: Prepare Android APK project
         shell: bash
