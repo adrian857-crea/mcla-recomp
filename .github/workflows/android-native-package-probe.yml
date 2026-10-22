@@ -153,6 +153,50 @@ jobs:
           echo "REX_RUNTIME=$RUNTIME" >> "$GITHUB_ENV"
           echo "Runtime encontrado: $RUNTIME"
 
+
+      - name: Diagnose SDL and JNI dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+
+          echo "========== 1. BIBLIOTECAS COMPILADAS =========="
+          find "$SDK" -type f \( \
+            -name '*.so' -o \
+            -name '*.aar' -o \
+            -name '*.jar' \
+          \) -print | sort
+
+          echo "========== 2. DEPENDENCIAS DO RUNTIME =========="
+          readelf -d "$REX_RUNTIME" | grep -E 'NEEDED|SONAME' || true
+
+          echo "========== 3. SIMBOLOS JNI =========="
+          llvm-nm -D "$REX_RUNTIME" 2>/dev/null \
+            | grep -E 'JNI_OnLoad|SDL|Java_' || true
+
+          echo "========== 4. REFERENCIAS A SDLActivity =========="
+          strings "$REX_RUNTIME" \
+            | grep -E 'SDLActivity|org/libsdl/app|SDL3' \
+            | sort -u || true
+
+          echo "========== 5. CODIGO JNI E SDL =========="
+          grep -R -n -E 'JNI_OnLoad|org\.libsdl\.app\.SDLActivity|FindClass.*SDLActivity' \
+            "$SDK/src" "$SDK/include" \
+            --include='*.cpp' \
+            --include='*.c' \
+            --include='*.h' \
+            --include='*.hpp' \
+            2>/dev/null | head -150 || true
+
+          echo "========== 6. ARQUIVOS JAVA DO SDL3 =========="
+          find "$SDK/thirdparty/sdl3" -type f \
+            \( -name 'SDLActivity.java' -o -name 'SDL.java' \) \
+            -print
+
+          echo "========== DIAGNOSTICO CONCLUIDO =========="
+
+
       - name: Prepare Android APK project
         shell: bash
         run: |
