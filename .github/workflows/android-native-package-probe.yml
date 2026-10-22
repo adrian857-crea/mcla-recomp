@@ -31,15 +31,20 @@ jobs:
           set -euo pipefail
           SDK="$RUNNER_TEMP/android-sdk"
           mkdir -p "$SDK/cmdline-tools"
+
           curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fSL \
             https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
             -o "$RUNNER_TEMP/cmdline-tools.zip"
+
           unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
           mkdir -p "$SDK/cmdline-tools/latest"
           mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* "$SDK/cmdline-tools/latest/"
+
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
+
           "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
             "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
@@ -48,18 +53,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p third_party
+
           git clone --recursive \
             https://github.com/adrian857-crea/rexglue-sdk.git \
             third_party/rexglue-sdk
+
           git -C third_party/rexglue-sdk log -1 --oneline
 
       - name: Configure ReXGlue for Android ARM64
         shell: bash
         run: |
           set -euo pipefail
+
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
+
           mkdir -p "$BUILD"
 
           FFMPEG="$SDK/thirdparty/FFmpeg"
@@ -135,6 +144,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
 
@@ -144,6 +154,7 @@ jobs:
           find "$SDK/out/android-arm64" -type f -name '*.so' -print
 
           RUNTIME="$(find "$SDK/out/android-arm64" -type f -name 'librexruntime.so' -print -quit)"
+
           if [ -z "$RUNTIME" ]; then
             echo "ERRO: librexruntime.so não foi encontrada."
             find "$SDK/out" -maxdepth 4 -type f -print || true
@@ -152,7 +163,6 @@ jobs:
 
           echo "REX_RUNTIME=$RUNTIME" >> "$GITHUB_ENV"
           echo "Runtime encontrado: $RUNTIME"
-
 
       - name: Diagnose SDL and JNI dependencies
         shell: bash
@@ -172,7 +182,8 @@ jobs:
           readelf -d "$REX_RUNTIME" | grep -E 'NEEDED|SONAME' || true
 
           echo "========== 3. SIMBOLOS JNI =========="
-          llvm-nm -D "$REX_RUNTIME" 2>/dev/null \
+          "$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
+            -D "$REX_RUNTIME" 2>/dev/null \
             | grep -E 'JNI_OnLoad|SDL|Java_' || true
 
           echo "========== 4. REFERENCIAS A SDLActivity =========="
@@ -182,11 +193,12 @@ jobs:
 
           echo "========== 5. CODIGO JNI E SDL =========="
           grep -R -n -E 'JNI_OnLoad|org\.libsdl\.app\.SDLActivity|FindClass.*SDLActivity' \
-            "$SDK/src" "$SDK/include" \
+            "$SDK/src" "$SDK/include" "$SDK/thirdparty/sdl3" \
             --include='*.cpp' \
             --include='*.c' \
             --include='*.h' \
             --include='*.hpp' \
+            --include='*.java' \
             2>/dev/null | head -150 || true
 
           echo "========== 6. ARQUIVOS JAVA DO SDL3 =========="
@@ -196,20 +208,46 @@ jobs:
 
           echo "========== DIAGNOSTICO CONCLUIDO =========="
 
-
       - name: Prepare Android APK project
         shell: bash
         run: |
           set -euo pipefail
+
           APP="$GITHUB_WORKSPACE/android-package-probe"
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           JNI="$APP/app/src/main/jniLibs/arm64-v8a"
+
           mkdir -p "$APP/app/src/main/java/com/centralgamer/mcla" "$JNI"
 
+          # CORREÇÃO: incluir as classes Java do SDL3.
+          SDL_JAVA="$SDK/thirdparty/sdl3/android-project/app/src/main/java/org/libsdl/app"
+          APP_JAVA="$APP/app/src/main/java/org/libsdl/app"
+
+          if [ ! -f "$SDL_JAVA/SDLActivity.java" ]; then
+            echo "ERRO: SDLActivity.java não encontrado em $SDL_JAVA"
+            find "$SDK/thirdparty/sdl3" -name 'SDLActivity.java' -print
+            exit 1
+          fi
+
+          if [ ! -f "$SDL_JAVA/SDL.java" ]; then
+            echo "ERRO: SDL.java não encontrado em $SDL_JAVA"
+            exit 1
+          fi
+
+          mkdir -p "$APP_JAVA"
+          cp -R "$SDL_JAVA/." "$APP_JAVA/"
+
+          echo "=== Classes Java do SDL3 incluídas ==="
+          find "$APP_JAVA" -maxdepth 1 -type f -name '*.java' -print | sort
+
+          # Copiar o runtime e outras bibliotecas nativas disponíveis.
           cp "$REX_RUNTIME" "$JNI/"
+
           find "$(dirname "$REX_RUNTIME")" -maxdepth 1 -type f -name '*.so' \
             ! -name 'librexruntime.so' -exec cp -n {} "$JNI/" \;
 
           CXX="$ANDROID_SDK_ROOT/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+
           test -f "$CXX"
           cp "$CXX" "$JNI/"
 
@@ -252,19 +290,23 @@ jobs:
                   applicationId "com.centralgamer.mcla"
                   minSdk 26
                   targetSdk 35
-                  versionCode 6
-                  versionName "0.6.0-native-manual-test"
+                  versionCode 7
+                  versionName "0.7.0-native-manual-test"
                   ndk { abiFilters "arm64-v8a" }
               }
 
-              buildTypes { debug { applicationIdSuffix ".debug" } }
+              buildTypes {
+                  debug { applicationIdSuffix ".debug" }
+              }
 
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
 
-              kotlinOptions { jvmTarget = "17" }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
           }
           EOF
 
@@ -273,8 +315,9 @@ jobs:
               <application
                   android:allowBackup="false"
                   android:extractNativeLibs="true"
-                  android:label="MCLA Native Load Test 0.6"
+                  android:label="MCLA Native Load Test 0.7"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
                   <activity
                       android:name=".MainActivity"
                       android:exported="true">
@@ -294,7 +337,6 @@ jobs:
           import android.os.Bundle
           import android.graphics.Color
           import android.view.Gravity
-          import android.view.View
           import android.widget.Button
           import android.widget.LinearLayout
           import android.widget.ScrollView
@@ -335,7 +377,7 @@ jobs:
                   }
 
                   statusText = TextView(this).apply {
-                      text = "APP ABERTO!\\n\\nA biblioteca nativa ainda NÃO foi carregada.\\n\\nToque no botão abaixo para testar."
+                      text = "APP ABERTO!\n\nA biblioteca nativa ainda NÃO foi carregada.\n\nToque no botão abaixo para testar."
                       textSize = 16f
                       gravity = Gravity.CENTER
                       setTextColor(Color.WHITE)
@@ -388,15 +430,15 @@ jobs:
                       System.loadLibrary("rexruntime")
 
                       statusText.text =
-                          "CARREGAMENTO CONCLUÍDO!\\n\\n" +
-                          "O Android carregou librexruntime.so sem lançar uma exceção.\\n\\n" +
+                          "CARREGAMENTO CONCLUÍDO!\n\n" +
+                          "O Android carregou librexruntime.so sem lançar uma exceção.\n\n" +
                           "Isso ainda não significa que o jogo está funcionando."
 
                       statusText.setTextColor(Color.rgb(100, 230, 140))
                   } catch (e: Throwable) {
                       statusText.text =
-                          "FALHA AO CARREGAR A BIBLIOTECA\\n\\n" +
-                          "Tipo: ${e.javaClass.name}\\n\\n" +
+                          "FALHA AO CARREGAR A BIBLIOTECA\n\n" +
+                          "Tipo: ${e.javaClass.name}\n\n" +
                           "Detalhes: ${e.message ?: "Sem detalhes disponíveis"}"
 
                       statusText.setTextColor(Color.rgb(255, 130, 130))
@@ -408,20 +450,29 @@ jobs:
           echo "=== Bibliotecas preparadas ==="
           ls -lh "$JNI"
 
+          echo "=== Conferindo arquivos Java necessários ==="
+          test -f "$APP_JAVA/SDLActivity.java"
+          test -f "$APP_JAVA/SDL.java"
+          echo "SDLActivity.java e SDL.java estão presentes."
+
       - name: Build and verify APK
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --no-daemon -p android-package-probe assembleDebug
+
           APK="android-package-probe/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
 
           mkdir -p native-package-probe/results
           cp "$APK" native-package-probe/results/mcla-native-package-probe.apk
+
           unzip -l "$APK" | tee native-package-probe/results/apk-contents.txt
 
           grep -q 'lib/arm64-v8a/librexruntime.so' native-package-probe/results/apk-contents.txt
           grep -q 'lib/arm64-v8a/libc++_shared.so' native-package-probe/results/apk-contents.txt
+
           echo "SUCCESS: runtime and C++ runtime are packaged in the APK."
 
       - name: Upload APK and build diagnostics
@@ -434,4 +485,5 @@ jobs:
             native-package-probe/android-sdk/CMakeCache.txt
           if-no-files-found: warn
           retention-days: 7
+
 
