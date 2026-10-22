@@ -52,8 +52,7 @@ jobs:
             https://github.com/adrian857-crea/rexglue-sdk.git \
             third_party/rexglue-sdk
           git -C third_party/rexglue-sdk log -1 --oneline
-           
-      
+
       - name: Configure ReXGlue for Android ARM64
         shell: bash
         run: |
@@ -63,7 +62,6 @@ jobs:
           BUILD="$GITHUB_WORKSPACE/native-package-probe/android-sdk"
           mkdir -p "$BUILD"
 
-          # Configurar o FFmpeg para Android ARM64 antes do CMake.
           FFMPEG="$SDK/thirdparty/FFmpeg"
           TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           CC="$TOOLCHAIN/aarch64-linux-android26-clang"
@@ -99,7 +97,6 @@ jobs:
 
           cd "$GITHUB_WORKSPACE"
 
-          # Corrigir a regra de compilação assembly para Android ARM64.
           python3 - "$SDK/CMakeLists.txt" <<'PY'
           import pathlib
           import sys
@@ -123,7 +120,6 @@ jobs:
               print("Regra de assembly ARM64 corrigida para este teste.")
           PY
 
-          # Configurar o projeto nativo para Android.
           cmake -S "$SDK" -B "$BUILD" -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
@@ -135,7 +131,6 @@ jobs:
             -DREXGLUE_ENABLE_TRACY=OFF \
             -DREXGLUE_BUILD_TESTS=OFF
 
-      
       - name: Compile native runtime and UI objects
         shell: bash
         run: |
@@ -151,14 +146,12 @@ jobs:
           RUNTIME="$(find "$SDK/out/android-arm64" -type f -name 'librexruntime.so' -print -quit)"
           if [ -z "$RUNTIME" ]; then
             echo "ERRO: librexruntime.so não foi encontrada."
-            echo "Conteúdo do diretório de saída:"
             find "$SDK/out" -maxdepth 4 -type f -print || true
             exit 1
           fi
 
           echo "REX_RUNTIME=$RUNTIME" >> "$GITHUB_ENV"
           echo "Runtime encontrado: $RUNTIME"
-
 
       - name: Prepare Android APK project
         shell: bash
@@ -206,22 +199,27 @@ jobs:
               id "com.android.application"
               id "org.jetbrains.kotlin.android"
           }
+
           android {
               namespace "com.centralgamer.mcla"
               compileSdk 35
+
               defaultConfig {
                   applicationId "com.centralgamer.mcla"
                   minSdk 26
                   targetSdk 35
-                  versionCode 4
-                  versionName "0.4.0-native-probe"
+                  versionCode 5
+                  versionName "0.5.0-native-load-test"
                   ndk { abiFilters "arm64-v8a" }
               }
+
               buildTypes { debug { applicationIdSuffix ".debug" } }
+
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
+
               kotlinOptions { jvmTarget = "17" }
           }
           EOF
@@ -230,9 +228,11 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <application
                   android:allowBackup="false"
-                  android:label="MCLA Native Probe"
+                  android:label="MCLA Native Load Test"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
@@ -255,25 +255,50 @@ jobs:
           class MainActivity : Activity() {
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
+
+                  val result = try {
+                      System.loadLibrary("rexruntime")
+                      "SUCESSO!\n\nO Android carregou a biblioteca nativa."
+                  } catch (e: Throwable) {
+                      "FALHA AO CARREGAR\n\n" +
+                          "${e.javaClass.simpleName}\n" +
+                          "${e.message ?: "Sem detalhes"}"
+                  }
+
                   val root = LinearLayout(this).apply {
                       orientation = LinearLayout.VERTICAL
                       gravity = Gravity.CENTER
                       setPadding(24, 32, 24, 32)
                       setBackgroundColor(Color.rgb(18, 18, 24))
                   }
+
                   root.addView(TextView(this).apply {
                       text = "MCLA Android"
                       textSize = 30f
                       gravity = Gravity.CENTER
                       setTextColor(Color.WHITE)
                   })
+
                   root.addView(TextView(this).apply {
-                      text = "Teste de bibliotecas nativas ARM64\n\nEste APK verifica o empacotamento do ReXGlue.\n\nO jogo ainda não é iniciado por esta versão."
-                      textSize = 16f
+                      text = "Teste de carregamento nativo ARM64"
+                      textSize = 17f
                       gravity = Gravity.CENTER
                       setTextColor(Color.LTGRAY)
-                      setPadding(0, 24, 0, 0)
+                      setPadding(0, 24, 0, 16)
                   })
+
+                  root.addView(TextView(this).apply {
+                      text = result
+                      textSize = 15f
+                      gravity = Gravity.CENTER
+                      setTextColor(
+                          if (result.startsWith("SUCESSO"))
+                              Color.rgb(100, 230, 140)
+                          else
+                              Color.rgb(255, 130, 130)
+                      )
+                  })
+
                   setContentView(root)
               }
           }
