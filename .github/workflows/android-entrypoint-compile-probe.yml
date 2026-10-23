@@ -1,0 +1,206 @@
+name: MCLA Android Entrypoint Compile Probe
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-entrypoint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout MCLA
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build git python3 unzip
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
+            -fSL \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -o "$RUNNER_TEMP/cmdline-tools.zip"
+
+          mkdir -p "$RUNNER_TEMP/cmdline-tools"
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" \
+            -d "$RUNNER_TEMP/cmdline-tools"
+
+          mkdir -p "$SDK/cmdline-tools/latest"
+          mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* \
+            "$SDK/cmdline-tools/latest/"
+
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" --licenses >/dev/null || true
+
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - name: Checkout Android-enabled ReXGlue SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p third_party
+
+          git clone --recursive \
+            https://github.com/adrian857-crea/rexglue-sdk.git \
+            third_party/rexglue-sdk
+
+          echo "=== ReXGlue commit ==="
+          git -C third_party/rexglue-sdk log -1 --oneline
+
+      - name: Verify Android entrypoint and required headers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          ENTRY="$GITHUB_WORKSPACE/src/android_main.cpp"
+
+          test -f "$ENTRY"
+          test -f "$SDK/include/rex/cvar.h"
+          test -f "$SDK/include/rex/logging.h"
+          test -f "$SDK/include/rex/ui/windowed_app.h"
+          test -f "$SDK/include/rex/ui/windowed_app_context_sdl.h"
+
+          echo "=== Entrypoint source ==="
+          sed -n '1,240p' "$ENTRY"
+
+          echo "=== SDL3 source and headers ==="
+          find "$SDK/thirdparty/sdl3" \
+            \( -path '*/include/SDL3/SDL.h' \
+            -o -path '*/include/SDL3/SDL_stdinc.h' \
+            -o -path '*/include/SDL3/SDL_events.h' \) \
+            -type f -print
+
+          echo "=== Available SDK CMake build directories ==="
+          find "$SDK" -maxdepth 3 -name CMakeCache.txt -print
+
+      - name: Configure Android ReXGlue
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          BUILD="$GITHUB_WORKSPACE/native-entrypoint-probe/android-sdk"
+          FFMPEG="$SDK/thirdparty/FFmpeg"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          test -x "$TOOLCHAIN/aarch64-linux-android26-clang"
+          test -x "$TOOLCHAIN/aarch64-linux-android26-clang++"
+
+          cd "$FFMPEG"
+
+          ./configure \
+            --arch=aarch64 \
+            --cpu=armv8-a \
+            --target-os=android \
+            --enable-cross-compile \
+            --cc="$TOOLCHAIN/aarch64-linux-android26-clang" \
+            --cxx="$TOOLCHAIN/aarch64-linux-android26-clang++" \
+            --ar="$TOOLCHAIN/llvm-ar" \
+            --ranlib="$TOOLCHAIN/llvm-ranlib" \
+            --nm="$TOOLCHAIN/llvm-nm" \
+            --strip="$TOOLCHAIN/llvm-strip" \
+            --disable-x86asm \
+            --disable-programs \
+            --disable-doc \
+            --disable-network \
+            --disable-autodetect \
+            --disable-everything \
+            --enable-avutil \
+            --enable-avcodec \
+            --disable-shared \
+            --enable-static
+
+          test -f "$FFMPEG/config.h"
+          cd "$GITHUB_WORKSPACE"
+
+          python3 - "$SDK/CMakeLists.txt" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          source = path.read_text()
+          old = '"<CMAKE_ASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+          new = '"<CMAKE_ASM_COMPILER> --target=aarch64-linux-android26 <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+
+          if old in source:
+              path.write_text(source.replace(old, new, 1))
+              print("ARM64 assembly rule patched for this temporary CI checkout.")
+          elif new in source:
+              print("ARM64 assembly rule already patched.")
+          else:
+              raise SystemExit("Expected Android assembly rule was not found.")
+          PY
+
+          cmake -S "$SDK" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF
+
+      - name: Build ReXGlue runtime and UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --build \
+            "$GITHUB_WORKSPACE/native-entrypoint-probe/android-sdk" \
+            --target rexruntime rexui --parallel 2
+
+      - name: Inspect Android entrypoint API compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          ENTRY="$GITHUB_WORKSPACE/src/android_main.cpp"
+
+          echo "=== Verify entrypoint API symbols ==="
+
+          grep -n 'SDLWindowedAppContext' "$ENTRY"
+          grep -n 'GetCreator("mcla")' "$ENTRY"
+          grep -n 'RunMainMessageLoop' "$ENTRY"
+
+          grep -n 'class SDLWindowedAppContext' \
+            "$SDK/include/rex/ui/windowed_app_context_sdl.h"
+          grep -n 'bool Initialize' \
+            "$SDK/include/rex/ui/windowed_app_context_sdl.h"
+          grep -n 'int RunMainMessageLoop' \
+            "$SDK/include/rex/ui/windowed_app_context_sdl.h"
+          grep -n 'static Creator GetCreator' \
+            "$SDK/include/rex/ui/windowed_app.h"
+
+          echo "=== SDK SDL entrypoint ==="
+          sed -n '1,180p' "$SDK/src/ui/windowed_app_main_sdl.cpp"
+
+          echo "=== Diagnostic completed ==="
