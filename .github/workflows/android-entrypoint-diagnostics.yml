@@ -1,0 +1,116 @@
+
+name: MCLA Android Entry Point Diagnostics
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout MCLA repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Inspect MCLA entry point
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p diagnostics
+
+          {
+            echo "=== Repository revision ==="
+            git rev-parse HEAD
+
+            echo
+            echo "=== Main entry point ==="
+            if [ -f src/main.cpp ]; then
+              sed -n '1,180p' src/main.cpp
+            else
+              echo "src/main.cpp not found"
+            fi
+
+            echo
+            echo "=== MCLA application lifecycle and game paths ==="
+            grep -n -E \
+              'OnConfigurePaths|OnPreSetup|OnPostSetup|game_data_root|default.xex|REX_DEFINE_APP' \
+              src/main.cpp src/mcla_app.cpp src/mcla_app.h 2>/dev/null || true
+
+            echo
+            echo "=== Root CMake configuration ==="
+            if [ -f CMakeLists.txt ]; then
+              sed -n '1,220p' CMakeLists.txt
+            fi
+          } | tee diagnostics/mcla-entrypoint.txt
+
+      - name: Clone Android-enabled ReXGlue SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --recursive \
+            https://github.com/adrian857-crea/rexglue-sdk.git \
+            third_party/rexglue-sdk
+
+          git -C third_party/rexglue-sdk rev-parse HEAD \
+            | tee diagnostics/rexglue-revision.txt
+
+      - name: Inspect ReXGlue lifecycle and Android integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+
+          {
+            echo "=== ReXApp lifecycle declarations ==="
+            grep -n -E \
+              'SetupEnvironment|SetupPresentation|ConstructRuntime|LaunchModule|OnConfigurePaths|OnPreSetup|OnPostSetup' \
+              "$SDK/include/rex/rex_app.h" 2>/dev/null || true
+
+            echo
+            echo "=== Runtime construction and XEX loading ==="
+            grep -n -E \
+              'ConstructRuntime|game_data_root|default.xex|LoadXexImage|LaunchModule|PrepareModuleLaunch' \
+              "$SDK/src/ui/rex_app.cpp" 2>/dev/null || true
+
+            echo
+            echo "=== Android surface and SDL configuration ==="
+            grep -R -n -E \
+              'surface_android|SDLActivity|JNI_OnLoad|org/libsdl/app|SDL3' \
+              "$SDK/src/ui" "$SDK/include" "$SDK/thirdparty" \
+              --include='*.cpp' --include='*.h' --include='*.hpp' --include='*.java' \
+              2>/dev/null | head -250 || true
+
+            echo
+            echo "=== Android-related source files ==="
+            find "$SDK" -type f \
+              \( -iname '*android*' -o -name 'SDLActivity.java' \) \
+              -not -path '*/.git/*' | head -150
+          } | tee diagnostics/rexglue-android-lifecycle.txt
+
+      - name: Create diagnostic summary
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "MCLA Android entry-point diagnostics"
+            echo
+            echo "- Static inspection only; no APK is built."
+            echo "- No game files are uploaded or required."
+            echo "- The existing working APK workflow remains untouched."
+            echo "- Findings do not prove that the Android lifecycle or game runtime works."
+          } | tee diagnostics/README.txt
+
+      - name: Upload diagnostic reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-entrypoint-diagnostics
+          path: diagnostics/
+          if-no-files-found: warn
+          retention-days: 7
