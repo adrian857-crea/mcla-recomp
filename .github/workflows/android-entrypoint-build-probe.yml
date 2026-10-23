@@ -1,0 +1,162 @@
+
+name: MCLA Android Entrypoint Build Probe
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  entrypoint-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout MCLA repository
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake \
+            ninja-build \
+            git \
+            python3 \
+            unzip \
+            clang \
+            libc++-18-dev \
+            libc++abi-18-dev \
+            libx11-xcb-dev \
+            libwayland-dev
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools" "$RUNNER_TEMP/cmdline-tools"
+
+          curl --http1.1 --retry 5 --retry-all-errors \
+            --retry-delay 2 -fSL \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -o "$RUNNER_TEMP/cmdline-tools.zip"
+
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" \
+            -d "$RUNNER_TEMP/cmdline-tools"
+
+          mkdir -p "$SDK/cmdline-tools/latest"
+          mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* \
+            "$SDK/cmdline-tools/latest/"
+
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" --licenses >/dev/null || true
+
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - name: Clone ReXGlue SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p third_party
+
+          git clone --recursive \
+            https://github.com/adrian857-crea/rexglue-sdk.git \
+            third_party/rexglue-sdk
+
+          echo "=== ReXGlue revision ==="
+          git -C third_party/rexglue-sdk log -1 --oneline
+
+      - name: Verify Android entrypoint source and SDL integration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== MCLA Android entrypoint ==="
+          test -f src/android_main.cpp
+          sed -n '1,240p' src/android_main.cpp
+
+          echo "=== MCLA CMake target ==="
+          sed -n '1,220p' CMakeLists.txt
+
+          echo "=== ReXGlue SDL entrypoint integration ==="
+          grep -n -A 18 -B 8 \
+            'windowed_app_main_sdl.cpp' \
+            third_party/rexglue-sdk/cmake/rexglue_helpers.cmake
+
+          echo "=== SDL3 Android Java sources ==="
+          find third_party/rexglue-sdk/thirdparty/sdl3 \
+            -type f \
+            \( -name 'SDLActivity.java' -o -name 'SDL.java' \) \
+            -print
+
+          echo "=== SDL3 main declarations ==="
+          grep -R -n \
+            -E 'SDL_main|SDLActivity' \
+            third_party/rexglue-sdk/thirdparty/sdl3/include/SDL3 \
+            third_party/rexglue-sdk/thirdparty/sdl3/src \
+            --include='*.h' \
+            --include='*.cpp' \
+            --include='*.c' \
+            2>/dev/null | head -100 || true
+
+      - name: Verify entrypoint API declarations
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+
+          echo "=== SDL windowed context declarations ==="
+          grep -R -n \
+            -E 'class SDLWindowedAppContext|Initialize\\(|RunMainMessageLoop' \
+            "$SDK/include/rex/ui" "$SDK/src/ui" \
+            --include='*.h' \
+            --include='*.hpp' \
+            --include='*.cpp' \
+            2>/dev/null | head -160 || true
+
+          echo "=== WindowedApp creator declarations ==="
+          grep -R -n \
+            -E 'GetCreator|GetWindowedAppCreator|REX_DEFINE_APP|SetParsedArguments|GetPositionalOptions' \
+            "$SDK/include/rex" "$SDK/src" \
+            --include='*.h' \
+            --include='*.hpp' \
+            --include='*.cpp' \
+            2>/dev/null | head -180 || true
+
+          echo "=== Cvar and logging declarations ==="
+          grep -R -n \
+            -E 'Init\\(|ApplyEnvironment|InitLoggingEarly' \
+            "$SDK/include/rex" \
+            --include='*.h' \
+            --include='*.hpp' \
+            2>/dev/null | head -120 || true
+
+      - name: Upload entrypoint diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-entrypoint-build-diagnostics
+          path: |
+            src/android_main.cpp
+            CMakeLists.txt
+            third_party/rexglue-sdk/cmake/rexglue_helpers.cmake
+          if-no-files-found: warn
+          retention-days: 7
