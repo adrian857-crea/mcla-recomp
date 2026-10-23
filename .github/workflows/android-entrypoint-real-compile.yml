@@ -232,55 +232,71 @@ jobs:
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           BUILD="$GITHUB_WORKSPACE/native-entrypoint-real-compile/android-sdk"
           ENTRY="$GITHUB_WORKSPACE/src/android_main.cpp"
-          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
           OBJECTS="$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects"
 
           test -f "$ENTRY"
-          test -x "$CXX"
+          test -f "$BUILD/compile_commands.json"
           mkdir -p "$OBJECTS"
 
-          SDL_HEADER="$(find "$SDK" "$BUILD" \
-            -type f -path "*/SDL3/SDL.h" -print -quit)"
+          python3 - "$BUILD/compile_commands.json" "$ENTRY" "$OBJECTS/android_main.o" <<'PY'
+          import json
+          import pathlib
+          import shlex
+          import subprocess
+          import sys
 
-          if [ -z "$SDL_HEADER" ]; then
-            echo "::error::SDL3/SDL.h was not found."
-            exit 1
-          fi
+          database = pathlib.Path(sys.argv[1])
+          entrypoint = pathlib.Path(sys.argv[2]).resolve()
+          output = pathlib.Path(sys.argv[3]).resolve()
+          entries = json.loads(database.read_text())
 
-          SDL_INCLUDE="${SDL_HEADER%/SDL3/SDL.h}"
+          candidates = [
+              item for item in entries
+              if pathlib.Path(item.get("file", "")).name == "windowed_app_context_sdl.cpp"
+          ]
 
-          FMT_HEADER="$(find "$SDK" "$BUILD" \
-            -type f -path "*/fmt/format.h" -print -quit || true)"
+          if not candidates:
+              raise SystemExit("Could not find the SDL UI compilation entry in compile_commands.json.")
 
-          if [ -z "$FMT_HEADER" ]; then
-            echo "::error::fmt/format.h was not found in the SDK or build tree."
-            echo "The dependency must be located before this entrypoint can compile."
-            exit 1
-          fi
+          entry = candidates[0]
+          command = entry.get("arguments")
+          if command is None:
+              command = shlex.split(entry["command"])
 
-          FMT_INCLUDE="${FMT_HEADER%/fmt/format.h}"
+          compiler = command[0]
+          args = command[1:]
+          filtered = []
+          skip_next = False
 
-          echo "=== SDL include ==="
-          echo "$SDL_INCLUDE"
-          echo "=== fmt include ==="
-          echo "$FMT_INCLUDE"
+          for arg in args:
+              if skip_next:
+                  skip_next = False
+                  continue
+              if arg in ("-o", "-c"):
+                  skip_next = arg == "-o"
+                  continue
+              if arg in ("-Xclang",):
+                  filtered.append(arg)
+                  continue
+              if arg == entry.get("file") or arg.endswith("windowed_app_context_sdl.cpp"):
+                  continue
+              if arg.endswith(".pch") or arg.endswith(".gch"):
+                  continue
+              if arg == "-include-pch":
+                  skip_next = True
+                  continue
+              filtered.append(arg)
 
-          "$CXX" \
-            --target=aarch64-linux-android26 \
-            -std=c++23 \
-            -DANDROID \
-            -DREX_PLATFORM_ANDROID=1 \
-            -DREXGLUE_BUILD_CONFIG=\"Release\" \
-            -I"$SDK/include" \
-            -I"$BUILD/include" \
-            -I"$SDK" \
-            -I"$SDK/thirdparty" \
-            -I"$SDL_INCLUDE" \
-            -I"$FMT_INCLUDE" \
-            -c "$ENTRY" \
-            -o "$OBJECTS/android_main.o"
+          # Use the same Android compiler flags and include paths as the SDK.
+          filtered.extend(["-c", str(entrypoint), "-o", str(output)])
 
-          echo "=== Generated object ==="
+          print("Compiler:", compiler)
+          print("Using include paths and definitions from the CMake compilation database.")
+          print("Compiling:", entrypoint)
+
+          subprocess.run([compiler, *filtered], cwd=entry.get("directory"), check=True)
+          print("Object generated:", output)
+          PY
+
           file "$OBJECTS/android_main.o"
           echo "Entrypoint compilation succeeded."
