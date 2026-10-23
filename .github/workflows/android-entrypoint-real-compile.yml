@@ -23,7 +23,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build git python3 unzip
+            cmake ninja-build git python3 unzip curl
 
       - name: Install Android SDK and NDK
         shell: bash
@@ -35,7 +35,7 @@ jobs:
 
           curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
             -fSL \
-            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
             -o "$RUNNER_TEMP/cmdline-tools.zip"
 
           unzip -q "$RUNNER_TEMP/cmdline-tools.zip" \
@@ -62,16 +62,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p third_party
 
+          mkdir -p third_party
           git clone --recursive \
-            https://github.com/adrian857-crea/rexglue-sdk.git \
+            "https://github.com/adrian857-crea/rexglue-sdk.git" \
             third_party/rexglue-sdk
 
-          echo "=== ReXGlue revision ==="
           git -C third_party/rexglue-sdk log -1 --oneline
 
-      - name: Verify source and SDL headers
+      - name: Verify source and dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -85,15 +84,14 @@ jobs:
           test -f "$SDK/include/rex/ui/windowed_app.h"
           test -f "$SDK/include/rex/ui/windowed_app_context_sdl.h"
 
-          echo "=== Entrypoint source ==="
+          echo "=== Android entrypoint ==="
           sed -n '1,180p' "$ENTRY"
 
+          echo "=== fmt header candidates ==="
+          find "$SDK" -type f -path "*/fmt/format.h" -print || true
+
           echo "=== SDL header candidates ==="
-          find "$SDK/thirdparty/sdl3" \
-            -type f \
-            \( -path '*/include/SDL3/SDL.h' \
-            -o -path '*/include/SDL3/SDL_stdinc.h' \) \
-            -print
+          find "$SDK" -type f -path "*/SDL3/SDL.h" -print
 
       - name: Configure Android FFmpeg
         shell: bash
@@ -152,12 +150,12 @@ jobs:
 
           if old in source:
               path.write_text(source.replace(old, new, 1))
-              print("Patched Android assembly command.")
+              print("Assembly command patched.")
           elif new in source:
-              print("Android assembly command already patched.")
+              print("Assembly command already patched.")
           else:
               raise SystemExit(
-                  "Expected assembly command not found; inspect SDK CMakeLists.txt."
+                  "Expected assembly command not found in ReXGlue CMakeLists.txt."
               )
           PY
 
@@ -176,6 +174,7 @@ jobs:
             -DANDROID_PLATFORM=android-26 \
             -DANDROID_STL=c++_shared \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
             -DREXGLUE_USE_VULKAN=ON \
             -DREXGLUE_USE_D3D12=OFF \
             -DREXGLUE_ENABLE_TRACY=OFF \
@@ -188,9 +187,10 @@ jobs:
 
           cmake --build \
             "$GITHUB_WORKSPACE/native-entrypoint-real-compile/android-sdk" \
-            --target rexruntime rexui --parallel 2
+            --target rexruntime rexui \
+            --parallel 2
 
-      - name: Locate SDL headers and generated build flags
+      - name: Discover generated include paths
         shell: bash
         run: |
           set -euo pipefail
@@ -198,21 +198,33 @@ jobs:
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           BUILD="$GITHUB_WORKSPACE/native-entrypoint-real-compile/android-sdk"
 
-          echo "=== SDL3 headers ==="
+          echo "=== fmt headers ==="
           find "$SDK" "$BUILD" \
-            -type f \
-            -path '*/SDL3/SDL.h' \
-            -print
+            -type f -path "*/fmt/format.h" -print || true
 
-          echo "=== Generated compile command candidates ==="
-          find "$BUILD" \
-            -name compile_commands.json \
-            -o -name build.ninja
+          echo "=== SDL headers ==="
+          find "$SDK" "$BUILD" \
+            -type f -path "*/SDL3/SDL.h" -print
 
-          echo "=== ReXGlue include directories ==="
-          find "$SDK/include" -maxdepth 3 -type d -print
+          echo "=== Compilation database ==="
+          test -f "$BUILD/compile_commands.json"
 
-      - name: Compile android_main.cpp directly
+          python3 - "$BUILD/compile_commands.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          entries = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          print("Compilation entries:", len(entries))
+
+          for entry in entries:
+              if "windowed_app_context_sdl" in entry.get("file", ""):
+                  print("Relevant source:", entry["file"])
+                  print("Command:", entry.get("command", entry.get("arguments", [])))
+                  break
+          PY
+
+      - name: Compile Android entrypoint
         shell: bash
         run: |
           set -euo pipefail
@@ -222,40 +234,53 @@ jobs:
           ENTRY="$GITHUB_WORKSPACE/src/android_main.cpp"
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           CXX="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
+          OBJECTS="$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects"
 
           test -f "$ENTRY"
           test -x "$CXX"
+          mkdir -p "$OBJECTS"
 
-          SDL_INCLUDE="$(find "$SDK" "$BUILD" \
-            -type f -path '*/SDL3/SDL.h' -print -quit)"
+          SDL_HEADER="$(find "$SDK" "$BUILD" \
+            -type f -path "*/SDL3/SDL.h" -print -quit)"
 
-          if [ -z "$SDL_INCLUDE" ]; then
-            echo "::error::SDL3/SDL.h was not found. Check the SDL dependency paths."
+          if [ -z "$SDL_HEADER" ]; then
+            echo "::error::SDL3/SDL.h was not found."
             exit 1
           fi
 
-          SDL_INCLUDE="${SDL_INCLUDE%/SDL3/SDL.h}"
+          SDL_INCLUDE="${SDL_HEADER%/SDL3/SDL.h}"
 
-          mkdir -p "$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects"
+          FMT_HEADER="$(find "$SDK" "$BUILD" \
+            -type f -path "*/fmt/format.h" -print -quit || true)"
 
-          echo "=== Selected SDL include directory ==="
+          if [ -z "$FMT_HEADER" ]; then
+            echo "::error::fmt/format.h was not found in the SDK or build tree."
+            echo "The dependency must be located before this entrypoint can compile."
+            exit 1
+          fi
+
+          FMT_INCLUDE="${FMT_HEADER%/fmt/format.h}"
+
+          echo "=== SDL include ==="
           echo "$SDL_INCLUDE"
-
-          echo "=== Direct Android ARM64 compilation ==="
+          echo "=== fmt include ==="
+          echo "$FMT_INCLUDE"
 
           "$CXX" \
             --target=aarch64-linux-android26 \
             -std=c++23 \
             -DANDROID \
             -DREX_PLATFORM_ANDROID=1 \
+            -DREXGLUE_BUILD_CONFIG=\"Release\" \
             -I"$SDK/include" \
+            -I"$BUILD/include" \
             -I"$SDK" \
             -I"$SDK/thirdparty" \
             -I"$SDL_INCLUDE" \
+            -I"$FMT_INCLUDE" \
             -c "$ENTRY" \
-            -o "$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects/android_main.o"
+            -o "$OBJECTS/android_main.o"
 
-          echo "=== Object file created ==="
-          file "$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects/android_main.o"
-
-          echo "=== Entrypoint compilation succeeded ==="
+          echo "=== Generated object ==="
+          file "$OBJECTS/android_main.o"
+          echo "Entrypoint compilation succeeded."
