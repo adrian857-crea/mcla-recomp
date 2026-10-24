@@ -224,12 +224,12 @@ jobs:
                   break
           PY
 
+      
       - name: Compile Android entrypoint
         shell: bash
         run: |
           set -euo pipefail
 
-          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           BUILD="$GITHUB_WORKSPACE/native-entrypoint-real-compile/android-sdk"
           ENTRY="$GITHUB_WORKSPACE/src/android_main.cpp"
           OBJECTS="$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects"
@@ -246,17 +246,17 @@ jobs:
           import sys
 
           database = pathlib.Path(sys.argv[1])
-          entrypoint = pathlib.Path(sys.argv[2]).resolve()
+          source = pathlib.Path(sys.argv[2]).resolve()
           output = pathlib.Path(sys.argv[3]).resolve()
           entries = json.loads(database.read_text())
 
           candidates = [
               item for item in entries
-              if pathlib.Path(item.get("file", "")).name == "windowed_app_context_sdl.cpp"
+              if pathlib.Path(item["file"]).name == "windowed_app_context_sdl.cpp"
           ]
 
           if not candidates:
-              raise SystemExit("Could not find the SDL UI compilation entry in compile_commands.json.")
+              raise SystemExit("No suitable Android C++ compile command found.")
 
           entry = candidates[0]
           command = entry.get("arguments")
@@ -266,35 +266,62 @@ jobs:
           compiler = command[0]
           args = command[1:]
           filtered = []
-          skip_next = False
+          i = 0
 
-          for arg in args:
-              if skip_next:
-                  skip_next = False
+          while i < len(args):
+              arg = args[i]
+
+              if arg in ("-o", "-MF", "-MT", "-MQ"):
+                  i += 2
                   continue
-              if arg in ("-o", "-c"):
-                  skip_next = arg == "-o"
+
+              if arg in ("-c", "-MD", "-MMD", "-MP", "-Winvalid-pch"):
+                  i += 1
                   continue
-              if arg in ("-Xclang",):
-                  filtered.append(arg)
+
+              if arg == "-Xclang":
+                  i += 1
+                  if i < len(args) and args[i] == "-include-pch":
+                      i += 1
+                      if i < len(args) and args[i] == "-Xclang":
+                          i += 1
+                      if i < len(args):
+                          i += 1
+                      continue
+
+                  if i < len(args) and args[i] == "-include":
+                      i += 1
+                      if i < len(args) and args[i] == "-Xclang":
+                          i += 1
+                      if i < len(args):
+                          i += 1
+                      continue
+
+                  if i < len(args):
+                      filtered.extend(["-Xclang", args[i]])
+                      i += 1
                   continue
-              if arg == entry.get("file") or arg.endswith("windowed_app_context_sdl.cpp"):
+
+              if arg.endswith("windowed_app_context_sdl.cpp"):
+                  i += 1
                   continue
-              if arg.endswith(".pch") or arg.endswith(".gch"):
-                  continue
-              if arg == "-include-pch":
-                  skip_next = True
-                  continue
+
               filtered.append(arg)
+              i += 1
 
-          # Use the same Android compiler flags and include paths as the SDK.
-          filtered.extend(["-c", str(entrypoint), "-o", str(output)])
+          filtered.extend(["-c", str(source), "-o", str(output)])
 
           print("Compiler:", compiler)
-          print("Using include paths and definitions from the CMake compilation database.")
-          print("Compiling:", entrypoint)
+          print("Compiling Android entrypoint:", source)
+          subprocess.run(
+              [compiler, *filtered],
+              cwd=entry["directory"],
+              check=True
+          )
 
-          subprocess.run([compiler, *filtered], cwd=entry.get("directory"), check=True)
+          if not output.is_file():
+              raise SystemExit("Compiler did not generate the expected object file.")
+
           print("Object generated:", output)
           PY
 
