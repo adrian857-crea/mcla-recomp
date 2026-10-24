@@ -327,3 +327,34 @@ jobs:
 
           file "$OBJECTS/android_main.o"
           echo "Entrypoint compilation succeeded."
+
+
+          
+      - name: Inspect native link dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          BUILD="$GITHUB_WORKSPACE/native-entrypoint-real-compile/android-sdk"
+          OBJECT="$GITHUB_WORKSPACE/native-entrypoint-real-compile/objects/android_main.o"
+
+          echo "=== Android entrypoint object ==="
+          file "$OBJECT"
+
+          echo "=== ReXGlue output libraries ==="
+          find "$SDK/out" "$BUILD" \
+            -type f \( -name "*.so" -o -name "*.a" \) \
+            -print 2>/dev/null | sort
+
+          echo "=== Undefined symbols in entrypoint ==="
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+
+          "$NM" -u -C "$OBJECT" || true
+
+          echo "=== SDL_main symbol ==="
+          "$NM" -C "$OBJECT" | grep -E 'SDL_main|main$' || true
+
+          echo "Native link dependency inspection completed."
+
