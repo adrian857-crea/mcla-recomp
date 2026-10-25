@@ -1,0 +1,91 @@
+
+name: MCLA Android SDL Native Build Map
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout MCLA
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout ReXGlue SDK
+        uses: actions/checkout@v4
+        with:
+          repository: adrian857-crea/rexglue-sdk
+          path: third_party/rexglue-sdk
+          submodules: recursive
+
+      - name: Map SDL and Android native build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p audit
+
+          {
+            echo "=== MCLA REVISION ==="
+            git rev-parse HEAD
+
+            echo
+            echo "=== SDK REVISION ==="
+            git -C third_party/rexglue-sdk rev-parse HEAD
+
+            echo
+            echo "=== SDK SUBMODULES ==="
+            git -C third_party/rexglue-sdk submodule status || true
+
+            echo
+            echo "=== SDL CMAKE AND ANDROID FILES ==="
+            find third_party/rexglue-sdk -type f \
+              \( -name CMakeLists.txt \
+              -o -name '*.cmake' \
+              -o -name '*.gradle' \
+              -o -name '*.gradle.kts' \
+              -o -name AndroidManifest.xml \
+              -o -name SDLActivity.java \) \
+              | grep -Ei 'sdl|android|thirdparty/CMakeLists|src/ui/CMakeLists' \
+              | head -n 250 || true
+
+            echo
+            echo "=== SDL TARGET DECLARATIONS ==="
+            grep -RInE \
+              'add_library\(SDL3|SDL3::SDL3|SDL3_SHARED|SDL3_STATIC|SDL_MAIN_USE_CALLBACKS|SDLActivity|SDL_main' \
+              third_party/rexglue-sdk/thirdparty \
+              --include='CMakeLists.txt' \
+              --include='*.cmake' \
+              --include='*.gradle' \
+              --include='*.gradle.kts' \
+              --include='*.java' \
+              2>/dev/null | head -n 250 || true
+
+            echo
+            echo "=== SDK THIRD-PARTY CONFIGURATION ==="
+            sed -n '1,240p' third_party/rexglue-sdk/thirdparty/CMakeLists.txt
+
+            echo
+            echo "=== MCLA SOURCES AND ENTRYPOINT ==="
+            grep -nE 'src/main.cpp|src/android_main.cpp|add_executable|add_library|rexglue_setup_target' \
+              CMakeLists.txt generated/rexglue.cmake || true
+
+            echo
+            echo "=== SDL JAVA ACTIVITY PATH ==="
+            find third_party/rexglue-sdk -name SDLActivity.java -print || true
+          } > audit/build-map.txt
+
+          cat audit/build-map.txt
+
+      - name: Upload build map
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-sdl-native-build-map
+          path: audit/build-map.txt
+          if-no-files-found: error
