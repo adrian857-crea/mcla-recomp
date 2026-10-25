@@ -96,10 +96,13 @@ jobs:
       - name: Diagnose C++23 standard library
         shell: bash
         run: |
-          set -euxo pipefail
+          set -u
 
+          echo "=== GCC version ==="
+          g++ --version
+
+          echo "=== Clang version ==="
           clang++-18 --version
-          clang++-18 -std=c++23 -v -E -x c++ /dev/null
 
           cat > /tmp/test_expected.cpp <<'EOF'
           #include <expected>
@@ -114,11 +117,19 @@ jobs:
           }
           EOF
 
-          clang++-18 -std=c++23 \
-            /tmp/test_expected.cpp \
-            -o /tmp/test_expected
+          echo "=== Test GCC C++23 ==="
+          if g++ -std=c++23 /tmp/test_expected.cpp -o /tmp/test_expected_gcc; then
+              echo "GCC_EXPECTED_OK=true"
+          else
+              echo "GCC_EXPECTED_OK=false"
+          fi
 
-          /tmp/test_expected
+          echo "=== Test Clang C++23 ==="
+          if clang++-18 -std=c++23 /tmp/test_expected.cpp -o /tmp/test_expected_clang; then
+              echo "CLANG_EXPECTED_OK=true"
+          else
+              echo "CLANG_EXPECTED_OK=false"
+          fi
 
 
       - name: Configure host-native ReXGlue code generator
