@@ -31,56 +31,31 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build
           
-      
-      - name: Install Android SDK tools
-        uses: android-actions/setup-android@v4
 
-      
-      
       - name: Install Android NDK and CMake
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
 
-          echo "=== SDK PATHS ==="
-          echo "ANDROID_HOME=${ANDROID_HOME:-missing}"
-          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-missing}"
-          command -v sdkmanager || true
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
-          SDKMANAGER="$(command -v sdkmanager || true)"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERRO: sdkmanager não encontrado"
-            exit 1
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager)"
           fi
 
-          echo "=== ACCEPT LICENSES ==="
-          yes | "$SDKMANAGER" --licenses || true
+          echo "=== SDKMANAGER ==="
+          "$SDKMANAGER" --version
 
-          echo "=== INSTALL PACKAGES ==="
-          "$SDKMANAGER" --install \
+          echo "=== INSTALLING PACKAGES ==="
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
             "platforms;android-35" \
             "build-tools;35.0.0" \
             "ndk;27.2.12479018" \
-            "cmake;3.25.2" \
-            2>&1 | tee android-sdk-install.log
-
-          RESULT=${PIPESTATUS[0]}
-
-          echo "SDKMANAGER_EXIT_CODE=$RESULT"
-
-          if [ "$RESULT" -ne 0 ]; then
-            echo "Instalação falhou; veja o log acima."
-            exit "$RESULT"
-          fi
+            "cmake;3.25.2"
 
           NDK="$ANDROID_HOME/ndk/27.2.12479018"
-          TOOLCHAIN="$NDK/build/cmake/android.toolchain.cmake"
 
-          if [ ! -f "$TOOLCHAIN" ]; then
-            echo "ERRO: toolchain Android não encontrado: $TOOLCHAIN"
-            exit 1
-          fi
+          test -f "$NDK/build/cmake/android.toolchain.cmake"
 
           echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
