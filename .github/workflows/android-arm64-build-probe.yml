@@ -132,6 +132,19 @@ jobs:
           fi
 
 
+      - name: Test Clang with explicit libstdc++
+        shell: bash
+        run: |
+          set -u
+
+          echo "=== Clang with explicit libstdc++ ==="
+          clang++-18 -std=c++23 -stdlib=libstdc++ \
+            /tmp/test_expected.cpp \
+            -o /tmp/test_expected_clang_gnu
+
+          /tmp/test_expected_clang_gnu
+
+
       - name: Configure host-native ReXGlue code generator
         shell: bash
         run: |
