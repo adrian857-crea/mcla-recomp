@@ -1,3 +1,4 @@
+
 name: MCLA Android ARM64 Build Probe
 
 on:
@@ -22,18 +23,26 @@ jobs:
           path: third_party/rexglue-sdk
           submodules: recursive
 
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build \
+            clang-18 \
+            lld-18 \
+            libvulkan-dev \
+            pkg-config
+
       - name: Install Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install Ninja
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build
-
-      - name: Install NDK and CMake
+      - name: Install Android NDK and CMake
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
 
@@ -46,10 +55,63 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
+      - name: Build host-native ReXGlue code generator
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          cmake -S third_party/rexglue-sdk \
+            -B build-rexglue-host \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DREXGLUE_BUILD_TESTS=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_USE_VULKAN=ON
+
+          cmake --build build-rexglue-host \
+            --target rexglue \
+            --parallel 2
+
+          HOST_CODEGEN="$GITHUB_WORKSPACE/third_party/rexglue-sdk/out/linux-amd64/rexglue"
+
+          test -x "$HOST_CODEGEN"
+          file "$HOST_CODEGEN"
+          "$HOST_CODEGEN" --help
+
+          echo "REXGLUE_HOST_CODEGEN_EXECUTABLE=$HOST_CODEGEN" >> "$GITHUB_ENV"
+
+      - name: Prepare host codegen integration
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("generated/rexglue.cmake")
+          content = path.read_text()
+
+          old = "COMMAND $<TARGET_FILE:rex::rexglue> codegen"
+          new = "COMMAND \"${REXGLUE_HOST_CODEGEN_EXECUTABLE}\" codegen"
+
+          if old not in content:
+              raise SystemExit(
+                  "Expected ReXGlue codegen command was not found. "
+                  "Stopping rather than modifying the wrong file."
+              )
+
+          path.write_text(content.replace(old, new, 1))
+          print("Configured generated/rexglue.cmake to use the Linux host generator.")
+          PY
+
+          grep -n "REXGLUE_HOST_CODEGEN_EXECUTABLE" generated/rexglue.cmake
+
       - name: Configure Android ARM64
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           cmake -S . -B build-android \
             -G Ninja \
@@ -58,8 +120,10 @@ jobs:
             -DANDROID_PLATFORM=android-26 \
             -DCMAKE_BUILD_TYPE=Release \
             -DREXSDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk" \
+            -DREXGLUE_HOST_CODEGEN_EXECUTABLE="$REXGLUE_HOST_CODEGEN_EXECUTABLE" \
             -DREXGLUE_BUILD_TESTS=OFF \
-            -DREXGLUE_BUILD_TRACY=OFF
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_USE_VULKAN=ON
 
       - name: Compile MCLA
         id: compile
@@ -79,7 +143,7 @@ jobs:
 
           exit "$RESULT"
 
-      - name: Record build diagnostics
+      - name: Record diagnostics
         if: always()
         shell: bash
         run: |
@@ -90,12 +154,13 @@ jobs:
             git rev-parse HEAD
 
             echo
-            echo "=== BUILD TARGET ==="
-            echo "mcla"
-
-            echo
-            echo "=== ANDROID ABI ==="
-            echo "arm64-v8a"
+            echo "=== HOST CODEGEN ==="
+            if [ -n "${REXGLUE_HOST_CODEGEN_EXECUTABLE:-}" ]; then
+              echo "$REXGLUE_HOST_CODEGEN_EXECUTABLE"
+              file "$REXGLUE_HOST_CODEGEN_EXECUTABLE" || true
+            else
+              echo "Host code generator was not configured."
+            fi
 
             echo
             echo "=== BUILD RESULT ==="
