@@ -93,6 +93,34 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
+      - name: Diagnose C++23 standard library
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          clang++-18 --version
+          clang++-18 -std=c++23 -v -E -x c++ /dev/null
+
+          cat > /tmp/test_expected.cpp <<'EOF'
+          #include <expected>
+          #include <vector>
+
+          std::expected<std::vector<int>, int> test() {
+              return std::vector<int>{1, 2, 3};
+          }
+
+          int main() {
+              return test().has_value() ? 0 : 1;
+          }
+          EOF
+
+          clang++-18 -std=c++23 \
+            /tmp/test_expected.cpp \
+            -o /tmp/test_expected
+
+          /tmp/test_expected
+
+
       - name: Configure host-native ReXGlue code generator
         shell: bash
         run: |
