@@ -1,0 +1,152 @@
+
+name: MCLA Android Startup Source Audit
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  startup-source-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout MCLA
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install inspection tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git python3 cmake ninja-build
+
+      - name: Checkout ReXGlue SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p third_party
+          git clone --recursive \
+            https://github.com/adrian857-crea/rexglue-sdk.git \
+            third_party/rexglue-sdk
+
+      - name: Audit startup sources and build configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p startup-source-audit
+          REPORT="$GITHUB_WORKSPACE/startup-source-audit/startup-audit.txt"
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/third_party/rexglue-sdk"
+
+          {
+            echo "=== MCLA ANDROID STARTUP SOURCE AUDIT ==="
+            date -u
+
+            echo
+            echo "=== REPOSITORY REVISIONS ==="
+            git -C "$ROOT" rev-parse HEAD
+            git -C "$SDK" rev-parse HEAD
+
+            echo
+            echo "=== TOP-LEVEL FILES ==="
+            find "$ROOT" -maxdepth 3 -type f \
+              ! -path '*/.git/*' \
+              ! -path '*/third_party/rexglue-sdk/*' \
+              | sort | head -n 500
+
+            echo
+            echo "=== CMAKE FILES ==="
+            find "$ROOT" "$SDK" -type f \
+              -name 'CMakeLists.txt' \
+              ! -path '*/.git/*' \
+              | sort | head -n 300
+
+            echo
+            echo "=== ANDROID ENTRYPOINT ==="
+            if test -f "$ROOT/src/android_main.cpp"; then
+              sed -n '1,260p' "$ROOT/src/android_main.cpp"
+            else
+              echo "src/android_main.cpp not found"
+            fi
+
+            echo
+            echo "=== APP CREATOR AND REGISTRATION REFERENCES ==="
+            grep -RInE \
+              'GetCreator|RegisterCreator|creators_|WindowedAppCreator|WindowedApp::|REGISTER.*APP|Create.*App|SDL_MAIN_HANDLED|SDL_main' \
+              "$ROOT/src" "$ROOT/include" "$SDK/src" "$SDK/include" \
+              --include='*.cpp' --include='*.cc' --include='*.c' \
+              --include='*.h' --include='*.hpp' \
+              2>/dev/null | head -n 500 || true
+
+            echo
+            echo "=== MCLA C++ SOURCES ==="
+            find "$ROOT" -type f \
+              \( -name '*.cpp' -o -name '*.cc' -o -name '*.c' \) \
+              ! -path '*/.git/*' \
+              ! -path '*/third_party/rexglue-sdk/*' \
+              | sort | head -n 500
+
+            echo
+            echo "=== CMAKE TARGETS AND LINK CONFIGURATION ==="
+            grep -RInE \
+              'add_executable|add_library|target_sources|target_link_libraries|FetchContent|add_subdirectory|SDL3|rexruntime|rexui|android_main' \
+              "$ROOT" \
+              --include='CMakeLists.txt' --include='*.cmake' \
+              --exclude-dir=.git --exclude-dir=third_party \
+              2>/dev/null | head -n 500 || true
+
+            echo
+            echo "=== ANDROID PACKAGE FILES ==="
+            find "$ROOT" "$SDK" -type f \
+              \( -name 'AndroidManifest.xml' -o -name '*.java' \
+                 -o -name '*.kt' -o -name 'build.gradle' \
+                 -o -name 'build.gradle.kts' \
+                 -o -name 'settings.gradle' \
+                 -o -name 'settings.gradle.kts' \) \
+              ! -path '*/.git/*' | sort | head -n 500
+
+            echo
+            echo "=== SDL ANDROID ACTIVITY REFERENCES ==="
+            grep -RInE \
+              'class SDLActivity|package org\.libsdl\.app|android:name=.*SDLActivity|SDLActivity' \
+              "$ROOT" "$SDK" \
+              --include='*.java' --include='*.xml' \
+              --include='*.gradle' --include='*.gradle.kts' \
+              --exclude-dir=.git \
+              2>/dev/null | head -n 300 || true
+
+            echo
+            echo "=== SUBMODULE CONFIGURATION ==="
+            if test -f "$ROOT/.gitmodules"; then
+              cat "$ROOT/.gitmodules"
+            else
+              echo "No .gitmodules file"
+            fi
+
+            echo
+            echo "=== ROOT CMAKE CONTENT ==="
+            if test -f "$ROOT/CMakeLists.txt"; then
+              sed -n '1,300p' "$ROOT/CMakeLists.txt"
+            else
+              echo "No root CMakeLists.txt"
+            fi
+
+            echo
+            echo "=== END OF AUDIT ==="
+          } 2>&1 | tee "$REPORT"
+
+      - name: Upload startup audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-startup-source-audit
+          path: startup-source-audit/startup-audit.txt
+          if-no-files-found: warn
+          retention-days: 7
