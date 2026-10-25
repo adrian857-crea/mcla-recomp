@@ -1,4 +1,3 @@
-
 name: MCLA Android ARM64 Build Probe
 
 on:
@@ -32,10 +31,12 @@ jobs:
           sudo apt-get install -y \
             build-essential \
             ninja-build \
-            clang-18 \
-            lld-18 \
+            clang-19 \
+            lld-19 \
             pkg-config \
             cmake \
+            python3 \
+            file \
             libvulkan-dev \
             libasound2-dev \
             libpulse-dev \
@@ -71,7 +72,8 @@ jobs:
 
           cmake --version
           ninja --version
-          clang-18 --version
+          clang-19 --version
+          clang++-19 --version
           pkg-config --version
 
       - name: Install Android SDK
@@ -93,16 +95,10 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Diagnose C++23 standard library
+      - name: Verify C++23 expected support
         shell: bash
         run: |
-          set -u
-
-          echo "=== GCC version ==="
-          g++ --version
-
-          echo "=== Clang version ==="
-          clang++-18 --version
+          set -euxo pipefail
 
           cat > /tmp/test_expected.cpp <<'EOF'
           #include <expected>
@@ -117,33 +113,18 @@ jobs:
           }
           EOF
 
-          echo "=== Test GCC C++23 ==="
-          if g++ -std=c++23 /tmp/test_expected.cpp -o /tmp/test_expected_gcc; then
-              echo "GCC_EXPECTED_OK=true"
-          else
-              echo "GCC_EXPECTED_OK=false"
-          fi
+          echo "=== GCC C++23 ==="
+          g++ -std=c++23 /tmp/test_expected.cpp -o /tmp/test_expected_gcc
+          /tmp/test_expected_gcc
 
-          echo "=== Test Clang C++23 ==="
-          if clang++-18 -std=c++23 /tmp/test_expected.cpp -o /tmp/test_expected_clang; then
-              echo "CLANG_EXPECTED_OK=true"
-          else
-              echo "CLANG_EXPECTED_OK=false"
-          fi
-
-
-      - name: Test Clang with explicit libstdc++
-        shell: bash
-        run: |
-          set -u
-
-          echo "=== Clang with explicit libstdc++ ==="
-          clang++-18 -std=c++23 -stdlib=libstdc++ \
+          echo "=== Clang 19 C++23 with libstdc++ ==="
+          clang++-19 -std=c++23 -stdlib=libstdc++ \
             /tmp/test_expected.cpp \
-            -o /tmp/test_expected_clang_gnu
+            -o /tmp/test_expected_clang
 
-          /tmp/test_expected_clang_gnu
+          /tmp/test_expected_clang
 
+          echo "CXX23_EXPECTED_TESTS_OK=true"
 
       - name: Configure host-native ReXGlue code generator
         shell: bash
@@ -154,8 +135,11 @@ jobs:
             -B build-rexglue-host \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang-18 \
-            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_C_COMPILER=clang-19 \
+            -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_CXX_STANDARD=23 \
+            -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+            -DCMAKE_CXX_EXTENSIONS=OFF \
             -DREXGLUE_BUILD_TESTS=OFF \
             -DREXGLUE_ENABLE_TRACY=OFF \
             -DREXGLUE_USE_VULKAN=ON
@@ -230,7 +214,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p build-report
-          set +e
+          set -o pipefail
 
           cmake --build build-android \
             --target mcla \
