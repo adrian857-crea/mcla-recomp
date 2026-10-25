@@ -1,0 +1,271 @@
+
+name: MCLA Android Native Link Map
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-link-map:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout MCLA
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build git python3 unzip curl file
+
+      - name: Install Android SDK and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools" "$RUNNER_TEMP/cmdline-tools"
+
+          curl --http1.1 --retry 5 --retry-all-errors \
+            --retry-delay 2 -fSL \
+            "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
+            -o "$RUNNER_TEMP/cmdline-tools.zip"
+
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" \
+            -d "$RUNNER_TEMP/cmdline-tools"
+
+          mkdir -p "$SDK/cmdline-tools/latest"
+          mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* \
+            "$SDK/cmdline-tools/latest/"
+
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" --licenses >/dev/null || true
+
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+            --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+      - name: Checkout ReXGlue SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p third_party
+          git clone --recursive \
+            "https://github.com/adrian857-crea/rexglue-sdk.git" \
+            third_party/rexglue-sdk
+
+          git -C third_party/rexglue-sdk log -1 --oneline
+
+      - name: Configure Android FFmpeg
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          cd "$SDK/thirdparty/FFmpeg"
+
+          ./configure \
+            --arch=aarch64 \
+            --cpu=armv8-a \
+            --target-os=android \
+            --enable-cross-compile \
+            --cc="$TOOLCHAIN/aarch64-linux-android26-clang" \
+            --cxx="$TOOLCHAIN/aarch64-linux-android26-clang++" \
+            --ar="$TOOLCHAIN/llvm-ar" \
+            --ranlib="$TOOLCHAIN/llvm-ranlib" \
+            --nm="$TOOLCHAIN/llvm-nm" \
+            --strip="$TOOLCHAIN/llvm-strip" \
+            --disable-x86asm \
+            --disable-programs \
+            --disable-doc \
+            --disable-network \
+            --disable-autodetect \
+            --disable-everything \
+            --enable-avutil \
+            --enable-avcodec \
+            --disable-shared \
+            --enable-static
+
+          test -f config.h
+
+      - name: Patch Android assembly target
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python3 - third_party/rexglue-sdk/CMakeLists.txt <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          source = path.read_text()
+
+          old = '"<CMAKE_ASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+          new = '"<CMAKE_ASM_COMPILER> --target=aarch64-linux-android26 <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
+
+          if old in source:
+              path.write_text(source.replace(old, new, 1))
+              print("Assembly command patched.")
+          elif new in source:
+              print("Assembly command already patched.")
+          else:
+              raise SystemExit("Assembly command pattern not found.")
+          PY
+
+      - name: Configure ReXGlue for Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          BUILD="$GITHUB_WORKSPACE/native-link-map/android-sdk"
+
+          cmake -S "$SDK" -B "$BUILD" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF
+
+      - name: Build ReXGlue runtime and UI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake --build \
+            "$GITHUB_WORKSPACE/native-link-map/android-sdk" \
+            --target rexruntime rexui \
+            --parallel 2
+
+      - name: Map targets, libraries and entrypoint registration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$GITHUB_WORKSPACE"
+          SDK="$ROOT/third_party/rexglue-sdk"
+          BUILD="$ROOT/native-link-map/android-sdk"
+          OUT="$ROOT/native-link-map"
+          REPORT="$OUT/link-map.txt"
+
+          mkdir -p "$OUT"
+
+          {
+            echo "=== MCLA ANDROID NATIVE LINK MAP ==="
+            date -u
+            echo
+
+            echo "=== SOURCE REVISION ==="
+            git -C "$SDK" rev-parse HEAD
+            git -C "$SDK" status --short
+            echo
+
+            echo "=== ANDROID ENTRYPOINT ==="
+            sed -n '1,240p' "$ROOT/src/android_main.cpp"
+            echo
+
+            echo "=== NINJA TARGETS ==="
+            ninja -C "$BUILD" -t targets all || true
+            echo
+
+            echo "=== RELEVANT LINK COMMANDS ==="
+            ninja -C "$BUILD" -t commands |
+              grep -E '(-shared| -o .*\.so| -o .*\.a|rexruntime|rexui|SDL3)' |
+              tail -n 160 || true
+            echo
+
+            echo "=== CREATOR REGISTRATION REFERENCES ==="
+            grep -RInE \
+              'GetCreator|RegisterCreator|creators_|WindowedAppCreator|SDLWindowedAppContext' \
+              "$ROOT/src" "$SDK/include" "$SDK/src" \
+              --include='*.cpp' --include='*.cc' --include='*.c' \
+              --include='*.h' --include='*.hpp' \
+              2>/dev/null | head -n 240 || true
+            echo
+
+            echo "=== COMPILE DATABASE: ENTRYPOINT-RELATED SOURCES ==="
+            python3 - "$BUILD/compile_commands.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          entries = json.loads(pathlib.Path(sys.argv[1]).read_text())
+          print("Total compile commands:", len(entries))
+
+          for entry in entries:
+              source = entry.get("file", "")
+              if any(word in source.lower() for word in (
+                  "windowed_app", "android_main", "sdl"
+              )):
+                  print("\nSOURCE:", source)
+                  print("DIRECTORY:", entry.get("directory", ""))
+                  print("COMMAND:", entry.get("command", entry.get("arguments", [])))
+          PY
+            echo
+
+            echo "=== GENERATED SHARED AND STATIC LIBRARIES ==="
+            find "$SDK" "$BUILD" -type f \
+              \( -name '*.so' -o -name '*.a' \) \
+              -print 2>/dev/null | sort
+            echo
+
+            echo "=== RUNTIME EXPORTED SYMBOLS ==="
+            NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+            NM="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm"
+
+            find "$SDK" "$BUILD" -type f -name '*.so' -print0 \
+              2>/dev/null |
+            while IFS= read -r -d '' lib; do
+              echo "--- $lib"
+              "$NM" -D -C "$lib" 2>/dev/null |
+                grep -E 'JNI_OnLoad|SDL_main|WindowedApp|GetCreator|SDLWindowedAppContext|rex::cvar' |
+                head -n 100 || true
+            done
+
+            echo
+            echo "=== SDL ANDROID JAVA SOURCE SEARCH ==="
+            find "$SDK" "$ROOT" -type f \
+              \( -name 'SDLActivity.java' -o -name 'SDL*.java' \) \
+              -print 2>/dev/null | head -n 100
+
+            echo
+            echo "=== ANDROID MANIFEST SEARCH ==="
+            find "$ROOT" "$SDK" -type f -name 'AndroidManifest.xml' \
+              -print 2>/dev/null | head -n 100
+
+            echo
+            echo "=== END OF REPORT ==="
+          } 2>&1 | tee "$REPORT"
+
+      - name: Upload native link map
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-native-link-map
+          path: native-link-map/link-map.txt
+          if-no-files-found: warn
+          retention-days: 7
