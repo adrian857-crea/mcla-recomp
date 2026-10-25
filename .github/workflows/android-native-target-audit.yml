@@ -13,92 +13,91 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - name: Checkout repository and submodules
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
-      - name: Inspect Android native entry points
+      - name: Inspect native target configuration
         shell: bash
         run: |
-          set -euo pipefail
-
           mkdir -p audit-report
+          set +e
 
           {
-            echo "MCLA ANDROID NATIVE TARGET AUDIT"
-            echo "================================"
-            echo
-            echo "Commit:"
-            git rev-parse HEAD
-            echo
-            echo "Submodule status:"
-            git submodule status || true
-            echo
-            echo "Relevant source files:"
-            find src third_party/rexglue-sdk \
-              -type f \( \
-                -name 'CMakeLists.txt' -o \
-                -name 'android_main.cpp' -o \
-                -name 'main.cpp' -o \
-                -name 'SDLActivity.java' \
-              \) -print 2>/dev/null | sort
-          } > audit-report/summary.txt
-
-          {
-            echo "===== ROOT CMakeLists.txt ====="
-            sed -n '1,260p' CMakeLists.txt
+            echo "=== COMMIT ==="
+            git rev-parse HEAD 2>&1
 
             echo
-            echo "===== ANDROID ENTRY POINT ====="
-            if [ -f src/android_main.cpp ]; then
-              sed -n '1,240p' src/android_main.cpp
+            echo "=== SUBMODULES ==="
+            git submodule status 2>&1
+
+            echo
+            echo "=== ROOT CMAKE ==="
+            if [ -f CMakeLists.txt ]; then
+              sed -n '1,260p' CMakeLists.txt
             else
-              echo "src/android_main.cpp NOT FOUND"
+              echo "Root CMakeLists.txt not found"
             fi
 
             echo
-            echo "===== MAIN ENTRY POINT ====="
+            echo "=== MAIN CPP ==="
             if [ -f src/main.cpp ]; then
               sed -n '1,200p' src/main.cpp
             else
-              echo "src/main.cpp NOT FOUND"
+              echo "src/main.cpp not found"
             fi
 
             echo
-            echo "===== RE XGLUE TARGET DEFINITIONS ====="
-            grep -R -n -E \
-              'function\(rexglue_setup_target|macro\(rexglue_setup_target|rexglue_setup_target|REX_DEFINE_APP|XE_UI_WINDOWED_APPS_IN_LIBRARY' \
-              generated include src third_party/rexglue-sdk \
-              --include='*.cmake' --include='CMakeLists.txt' \
-              --include='*.h' --include='*.hpp' --include='*.cpp' \
-              2>/dev/null || true
+            echo "=== ANDROID MAIN CPP ==="
+            if [ -f src/android_main.cpp ]; then
+              sed -n '1,240p' src/android_main.cpp
+            else
+              echo "src/android_main.cpp not found"
+            fi
 
             echo
-            echo "===== SDL ANDROID GRADLE CONFIGURATION ====="
+            echo "=== RE XGLUE TARGET MACROS ==="
+            grep -R -n -E \
+              'rexglue_setup_target|REX_DEFINE_APP|XE_UI_WINDOWED_APPS_IN_LIBRARY' \
+              generated include src third_party/rexglue-sdk \
+              --include='*.cmake' \
+              --include='CMakeLists.txt' \
+              --include='*.h' \
+              --include='*.hpp' \
+              --include='*.cpp' \
+              2>&1
+
+            echo
+            echo "=== SDL ACTIVITY ==="
+            find third_party/rexglue-sdk \
+              -name SDLActivity.java -type f -print 2>&1
+
+            echo
+            echo "=== SDL ANDROID GRADLE FILES ==="
             find third_party/rexglue-sdk \
               -path '*/android-project/app/build.gradle' \
-              -type f -print -exec sed -n '1,240p' {} \; \
-              2>/dev/null || true
+              -type f -print 2>&1
 
+          } > audit-report/native-target-details.txt 2>&1
+
+          {
+            echo "Audit completed."
+            echo "Commit: $(git rev-parse HEAD 2>/dev/null)"
             echo
-            echo "===== SDL ACTIVITY LIBRARY LOADING ====="
-            grep -R -n -E \
-              'getMainSharedObject|getMainFunction|System.loadLibrary' \
-              third_party/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java \
-              2>/dev/null || true
+            echo "Report size:"
+            wc -c audit-report/native-target-details.txt
+            echo
+            echo "Report preview:"
+            sed -n '1,100p' audit-report/native-target-details.txt
+          } | tee audit-report/summary.txt
 
-          } > audit-report/native-target-details.txt
-
-          cat audit-report/summary.txt
-
-          echo
-          echo "Audit files generated:"
-          ls -lh audit-report
+          exit 0
 
       - name: Upload audit report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: mcla-android-native-target-audit
           path: audit-report/
-          if-no-files-found: error
+          if-no-files-found: warn
