@@ -1,0 +1,93 @@
+
+name: MCLA Android Native Entry Link Audit
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout MCLA
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout ReXGlue SDK
+        uses: actions/checkout@v4
+        with:
+          repository: adrian857-crea/rexglue-sdk
+          path: third_party/rexglue-sdk
+          submodules: recursive
+
+      - name: Inspect Android entry and app registration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p audit
+
+          {
+            echo "=== REPOSITORY REVISION ==="
+            git rev-parse HEAD
+
+            echo
+            echo "=== SDK REVISION ==="
+            git -C third_party/rexglue-sdk rev-parse HEAD
+
+            echo
+            echo "=== ROOT CMAKE TARGETS ==="
+            grep -nE \
+              'project\\(|add_executable|add_library|MCLA_SOURCES|android_main|rexglue_setup_target' \
+              CMakeLists.txt generated/rexglue.cmake || true
+
+            echo
+            echo "=== ANDROID ENTRYPOINT ==="
+            sed -n '1,220p' src/android_main.cpp
+
+            echo
+            echo "=== APP REGISTRATION ==="
+            sed -n '1,100p' src/main.cpp
+
+            echo
+            echo "=== ANDROID LIBRARY TARGETS IN SDK ==="
+            grep -RInE \
+              'SDLActivity|SDL_main|add_library\\([^)]*SHARED|add_library\\([^)]*MODULE|android_main\\.cpp|SDL3::SDL3' \
+              third_party/rexglue-sdk/src \
+              third_party/rexglue-sdk/cmake \
+              third_party/rexglue-sdk/thirdparty/sdl3 \
+              --include='CMakeLists.txt' \
+              --include='*.cmake' \
+              --include='*.gradle' \
+              --include='*.java' \
+              2>/dev/null | head -n 250 || true
+
+            echo
+            echo "=== ANDROID PROJECT FILES ==="
+            find third_party/rexglue-sdk -type f \
+              \( -name 'AndroidManifest.xml' \
+              -o -name 'build.gradle' \
+              -o -name 'build.gradle.kts' \
+              -o -name 'settings.gradle' \
+              -o -name 'SDLActivity.java' \) \
+              | head -n 150
+
+            echo
+            echo "=== SDL JAVA ACTIVITY ==="
+            find third_party/rexglue-sdk -name SDLActivity.java \
+              -print -exec sed -n '1,100p' {} \; || true
+          } > audit/report.txt
+
+          cat audit/report.txt
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-native-entry-link-audit
+          path: audit/report.txt
+          if-no-files-found: error
