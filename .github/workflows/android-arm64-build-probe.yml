@@ -23,23 +23,61 @@ jobs:
           path: third_party/rexglue-sdk
           submodules: recursive
 
-      - name: Install build dependencies
+      - name: Install Linux build dependencies
         shell: bash
         run: |
           set -euxo pipefail
 
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential \
             ninja-build \
             clang-18 \
             lld-18 \
+            pkg-config \
+            cmake \
             libvulkan-dev \
-            pkg-config
+            libasound2-dev \
+            libpulse-dev \
+            libaudio-dev \
+            libfribidi-dev \
+            libjack-jackd2-dev \
+            libsndio-dev \
+            libx11-dev \
+            libxext-dev \
+            libxrandr-dev \
+            libxcursor-dev \
+            libxfixes-dev \
+            libxi-dev \
+            libxss-dev \
+            libxtst-dev \
+            libxkbcommon-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libgl1-mesa-dev \
+            libgles2-mesa-dev \
+            libegl1-mesa-dev \
+            libdbus-1-dev \
+            libibus-1.0-dev \
+            libudev-dev \
+            libthai-dev \
+            libusb-1.0-0-dev \
+            libpipewire-0.3-dev \
+            libwayland-dev \
+            libdecor-0-dev \
+            liburing-dev \
+            libunwind-dev \
+            libx11-xcb-dev
+
+          cmake --version
+          ninja --version
+          clang-18 --version
+          pkg-config --version
 
       - name: Install Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Install Android NDK and CMake
+      - name: Install Android NDK
         shell: bash
         run: |
           set -euxo pipefail
@@ -55,7 +93,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
-      - name: Build host-native ReXGlue code generator
+      - name: Configure host-native ReXGlue code generator
         shell: bash
         run: |
           set -euxo pipefail
@@ -78,9 +116,19 @@ jobs:
 
           test -x "$HOST_CODEGEN"
           file "$HOST_CODEGEN"
-          "$HOST_CODEGEN" --help
 
           echo "REXGLUE_HOST_CODEGEN_EXECUTABLE=$HOST_CODEGEN" >> "$GITHUB_ENV"
+
+      - name: Verify host code generator
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          HOST_CODEGEN="$REXGLUE_HOST_CODEGEN_EXECUTABLE"
+
+          test -x "$HOST_CODEGEN"
+          file "$HOST_CODEGEN"
+          "$HOST_CODEGEN" --help
 
       - name: Prepare host codegen integration
         shell: bash
@@ -94,16 +142,16 @@ jobs:
           content = path.read_text()
 
           old = "COMMAND $<TARGET_FILE:rex::rexglue> codegen"
-          new = "COMMAND \"${REXGLUE_HOST_CODEGEN_EXECUTABLE}\" codegen"
+          new = 'COMMAND "${REXGLUE_HOST_CODEGEN_EXECUTABLE}" codegen'
 
           if old not in content:
               raise SystemExit(
                   "Expected ReXGlue codegen command was not found. "
-                  "Stopping rather than modifying the wrong file."
+                  "Stopping to avoid modifying the wrong command."
               )
 
           path.write_text(content.replace(old, new, 1))
-          print("Configured generated/rexglue.cmake to use the Linux host generator.")
+          print("Host code generator integration prepared.")
           PY
 
           grep -n "REXGLUE_HOST_CODEGEN_EXECUTABLE" generated/rexglue.cmake
@@ -115,7 +163,7 @@ jobs:
 
           cmake -S . -B build-android \
             -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/27.2.12479018/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a \
             -DANDROID_PLATFORM=android-26 \
             -DCMAKE_BUILD_TYPE=Release \
@@ -138,6 +186,7 @@ jobs:
             2>&1 | tee build-report/compile.log
 
           RESULT=${PIPESTATUS[0]}
+
           echo "BUILD_EXIT_CODE=$RESULT" \
             | tee build-report/build-result.txt
 
