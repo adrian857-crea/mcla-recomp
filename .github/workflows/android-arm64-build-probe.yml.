@@ -1,0 +1,115 @@
+name: MCLA Android ARM64 Build Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout MCLA
+        uses: actions/checkout@v4
+
+      - name: Checkout ReXGlue SDK
+        uses: actions/checkout@v4
+        with:
+          repository: adrian857-crea/rexglue-sdk
+          path: third_party/rexglue-sdk
+          submodules: recursive
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Ninja
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Install NDK and CMake
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1"
+
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: Configure Android ARM64
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cmake -S . -B build-android \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/27.2.12479018/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk" \
+            -DREXGLUE_BUILD_TESTS=OFF \
+            -DREXGLUE_BUILD_TRACY=OFF
+
+      - name: Compile MCLA
+        id: compile
+        shell: bash
+        run: |
+          mkdir -p build-report
+          set +e
+
+          cmake --build build-android \
+            --target mcla \
+            --parallel 2 \
+            2>&1 | tee build-report/compile.log
+
+          RESULT=${PIPESTATUS[0]}
+          echo "BUILD_EXIT_CODE=$RESULT" \
+            | tee build-report/build-result.txt
+
+          exit "$RESULT"
+
+      - name: Record build diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p build-report
+
+          {
+            echo "=== SOURCE REVISION ==="
+            git rev-parse HEAD
+
+            echo
+            echo "=== BUILD TARGET ==="
+            echo "mcla"
+
+            echo
+            echo "=== ANDROID ABI ==="
+            echo "arm64-v8a"
+
+            echo
+            echo "=== BUILD RESULT ==="
+            if [ -f build-report/build-result.txt ]; then
+              cat build-report/build-result.txt
+            else
+              echo "Compilation did not reach the build step."
+            fi
+          } > build-report/environment.txt
+
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-arm64-build-probe
+          path: build-report/
+          if-no-files-found: warn
