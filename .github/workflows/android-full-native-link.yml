@@ -22,6 +22,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cmake ninja-build git python3 unzip curl jq clang-19
 
+      
       - name: Download private default.xex
         shell: bash
         env:
@@ -29,24 +30,80 @@ jobs:
         run: |
           set -euo pipefail
           set +x
-          test -n "${MCLA_ASSETS_TOKEN:-}" || { echo "Missing MCLA_ASSETS_TOKEN"; exit 1; }
+
+          test -n "${MCLA_ASSETS_TOKEN:-}" || {
+            echo "::error::Missing MCLA_ASSETS_TOKEN"
+            exit 1
+          }
+
           API="https://api.github.com/repos/adrian857-crea/mcla-private-assets/releases/tags/android-input-test"
+          ASSET_API="https://api.github.com/repos/adrian857-crea/mcla-private-assets/releases/assets"
           H="$RUNNER_TEMP/mcla-headers"
           J="$RUNNER_TEMP/mcla-release.json"
           Z="$RUNNER_TEMP/default-xex.zip"
-          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$MCLA_ASSETS_TOKEN" > "$H"
-          curl --retry 4 --retry-all-errors --retry-delay 2 -fsSL -H @"$H" "$API" -o "$J"
-          ID="$(jq -er '.assets[] | select(.name == "default-xex.zip") | .id' "$J")"
-          curl --retry 4 --retry-all-errors --retry-delay 2 -fsSL -H @"$H" -H "Accept: application/octet-stream" "https://api.github.com/repos/adrian857-crea/mcla-private-assets/releases/assets/$ID" -o "$Z"
           mkdir -p "$RUNNER_TEMP/xex" game
+
+          printf 'Authorization: Bearer %s\nAccept: application/vnd.github+json\nX-GitHub-Api-Version: 2022-11-28\n' "$MCLA_ASSETS_TOKEN" > "$H"
+
+          curl --retry 4 --retry-all-errors --retry-delay 2 \
+            -fsSL -H @"$H" "$API" -o "$J"
+
+          echo "Checking release asset metadata..."
+          jq -e '.assets | type == "array"' "$J" >/dev/null
+
+          ID="$(jq -er '[.assets[] | select(.name == "default-xex.zip")][0].id // empty' "$J")"
+          SIZE="$(jq -er --argjson id "$ID" '.assets[] | select(.id == $id) | .size' "$J")"
+
+          echo "Asset ID: $ID"
+          echo "Expected asset size: $SIZE bytes"
+
+          test "$SIZE" -gt 0 || {
+            echo "::error::The release asset has an invalid size."
+            exit 1
+          }
+
+          STATUS="$(curl --retry 4 --retry-all-errors --retry-delay 2 \
+            -sSL -L -H @"$H" \
+            -H "Accept: application/octet-stream" \
+            -o "$Z" -w '%{http_code}' \
+            "$ASSET_API/$ID")"
+
+          echo "Download HTTP status: $STATUS"
+          test "$STATUS" = "200" || {
+            echo "::error::Asset download returned HTTP $STATUS"
+            exit 1
+          }
+
+          ACTUAL_SIZE="$(wc -c < "$Z" | tr -d ' ')"
+          echo "Downloaded size: $ACTUAL_SIZE bytes"
+
+          test "$ACTUAL_SIZE" -eq "$SIZE" || {
+            echo "::error::Downloaded size differs from the release asset metadata."
+            exit 1
+          }
+
+          if ! unzip -tq "$Z" >/dev/null; then
+            echo "::error::Downloaded asset is not a valid ZIP archive."
+            file "$Z" || true
+            exit 1
+          fi
+
           unzip -oq "$Z" -d "$RUNNER_TEMP/xex"
           XEX="$(find "$RUNNER_TEMP/xex" -type f -name default.xex -print -quit)"
-          test -n "$XEX" || { echo "default.xex missing from private asset"; exit 1; }
+
+          test -n "$XEX" || {
+            echo "::error::default.xex was not found inside the ZIP."
+            exit 1
+          }
+
           install -m 600 "$XEX" game/default.xex
           test -s game/default.xex
+
           rm -f "$H" "$J" "$Z"
           rm -rf "$RUNNER_TEMP/xex"
-          echo "Private XEX downloaded; file contents are not printed."
+
+          echo "Private XEX downloaded and validated; file contents were not printed."
+
 
       - name: Checkout ReXGlue SDK
         run: |
