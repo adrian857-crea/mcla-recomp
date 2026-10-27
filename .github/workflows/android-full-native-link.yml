@@ -256,6 +256,64 @@ jobs:
           cp "$LIB" native-full-link-results/libmain.so
           sha256sum native-full-link-results/libmain.so > native-full-link-results/SHA256SUMS.txt
 
+
+      - name: Package Android APK (SDL3 launcher probe)
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          ANDROID_PROJECT="$SDK/thirdparty/sdl3/android-project"
+          JNI_LIBS="$ANDROID_PROJECT/app/src/main/jniLibs/arm64-v8a"
+
+          test -f "$ANDROID_PROJECT/gradlew" || {
+            echo "::error::SDL Android Gradle wrapper not found"
+            find "$ANDROID_PROJECT" -maxdepth 3 -type f | sort | head -200
+            exit 1
+          }
+
+          test -f "$ANDROID_PROJECT/app/src/main/AndroidManifest.xml"
+
+          mkdir -p "$JNI_LIBS"
+          cp native-full-link-results/libmain.so "$JNI_LIBS/libmain.so"
+
+          RUNTIME="$SDK/out/android-arm64/librexruntime.so"
+          test -s "$RUNTIME" || {
+            echo "::error::librexruntime.so not found"
+            find "$SDK/out/android-arm64" -name '*.so' -print
+            exit 1
+          }
+
+          cp "$RUNTIME" "$JNI_LIBS/librexruntime.so"
+
+          echo "Native libraries staged:"
+          ls -lh "$JNI_LIBS"
+
+          chmod +x "$ANDROID_PROJECT/gradlew"
+          cd "$ANDROID_PROJECT"
+          ./gradlew --no-daemon --stacktrace assembleDebug
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+
+          mkdir -p "$GITHUB_WORKSPACE/android-apk-results"
+          cp "$APK" "$GITHUB_WORKSPACE/android-apk-results/mcla-android-package-probe.apk"
+
+          sha256sum "$GITHUB_WORKSPACE/android-apk-results/mcla-android-package-probe.apk" \
+            > "$GITHUB_WORKSPACE/android-apk-results/SHA256SUMS.txt"
+
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
+            "$GITHUB_WORKSPACE/android-apk-results/mcla-android-package-probe.apk" | head -20
+
+      - name: Upload Android APK probe
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcla-android-apk-package-probe
+          path: android-apk-results/
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload native link artifact and diagnostics
         if: always()
         uses: actions/upload-artifact@v4
