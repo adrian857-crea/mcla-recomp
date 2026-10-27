@@ -1,3 +1,4 @@
+
 # mcla - ReXGlue Recompiled Project
 #
 # SDK boilerplate lives in generated/rexglue.cmake.
@@ -8,9 +9,13 @@ project(mcla LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# SDL3 Android expects libmain.so.
+if(ANDROID)
+    set(REXGLUE_HOST_TARGET main)
+endif()
+
 include(generated/rexglue.cmake)
 
-# Sources
 set(MCLA_SOURCES
     src/main.cpp
     src/mcla_app.cpp
@@ -26,15 +31,22 @@ set(MCLA_SOURCES
     src/code_pointer_scan.cpp
 )
 
-if(WIN32)
+if(ANDROID)
+    add_library(main SHARED
+        ${MCLA_SOURCES}
+        src/android_main.cpp
+    )
+    rexglue_setup_target(main)
+
+elseif(WIN32)
     add_executable(mcla WIN32 ${MCLA_SOURCES})
+    rexglue_setup_target(mcla)
+
 else()
     add_executable(mcla ${MCLA_SOURCES})
+    rexglue_setup_target(mcla)
 endif()
 
-rexglue_setup_target(mcla)
-
 if(WIN32)
-    # timeBeginPeriod for the frame limiter.
     target_link_libraries(mcla PRIVATE winmm)
 endif()
