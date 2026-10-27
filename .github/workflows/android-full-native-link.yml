@@ -257,54 +257,144 @@ jobs:
           sha256sum native-full-link-results/libmain.so > native-full-link-results/SHA256SUMS.txt
 
 
+
       - name: Package Android APK (SDL3 launcher probe)
         shell: bash
         run: |
           set -euo pipefail
 
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
-          ANDROID_PROJECT="$SDK/thirdparty/sdl3/android-project"
+          SDL_SOURCE="$SDK/thirdparty/sdl3"
+          ANDROID_PROJECT="$SDL_SOURCE/android-project"
+          JNI_DIR="$ANDROID_PROJECT/app/jni"
           JNI_LIBS="$ANDROID_PROJECT/app/src/main/jniLibs/arm64-v8a"
+          RESULTS="$GITHUB_WORKSPACE/android-apk-results"
+
+          echo "=== Verificando estrutura SDL3 ==="
 
           test -f "$ANDROID_PROJECT/gradlew" || {
-            echo "::error::SDL Android Gradle wrapper not found"
-            find "$ANDROID_PROJECT" -maxdepth 3 -type f | sort | head -200
+            echo "::error::Gradle wrapper do SDL3 não encontrado"
+            find "$SDL_SOURCE" -maxdepth 4 \
+              \( -name gradlew -o -name Android.mk -o -name SDLActivity.java \) \
+              -print | head -200
             exit 1
           }
 
           test -f "$ANDROID_PROJECT/app/src/main/AndroidManifest.xml"
-
-          mkdir -p "$JNI_LIBS"
-          cp native-full-link-results/libmain.so "$JNI_LIBS/libmain.so"
-
-          RUNTIME="$SDK/out/android-arm64/librexruntime.so"
-          test -s "$RUNTIME" || {
-            echo "::error::librexruntime.so not found"
-            find "$SDK/out/android-arm64" -name '*.so' -print
+          test -f "$JNI_DIR/Android.mk"
+          test -f "$JNI_DIR/src/Android.mk"
+          test -f "$SDL_SOURCE/Android.mk" || {
+            echo "::error::Android.mk não encontrado na raiz do SDL3"
             exit 1
           }
 
+          echo "=== Preparando o vínculo SDL ==="
+
+          SDL_LINK="$JNI_DIR/SDL"
+
+          if [ -L "$SDL_LINK" ]; then
+            CURRENT_TARGET="$(readlink "$SDL_LINK")"
+            echo "Vínculo SDL existente: $CURRENT_TARGET"
+
+            if [ ! -e "$SDL_LINK/Android.mk" ]; then
+              rm "$SDL_LINK"
+            fi
+          fi
+
+          if [ ! -e "$SDL_LINK" ]; then
+            if [ -e "$SDL_LINK" ]; then
+              echo "::error::JNI/SDL existe, mas não é um SDL válido"
+              exit 1
+            fi
+            ln -s "$SDL_SOURCE" "$SDL_LINK"
+          fi
+
+          test -f "$SDL_LINK/Android.mk" || {
+            echo "::error::O vínculo SDL não aponta para fontes válidos"
+            ls -la "$JNI_DIR"
+            exit 1
+          }
+
+          echo "SDL Android.mk: $(readlink -f "$SDL_LINK/Android.mk")"
+
+          echo "=== Preparando bibliotecas nativas ==="
+
+          mkdir -p "$JNI_LIBS" "$RESULTS"
+
+          MAIN="$GITHUB_WORKSPACE/native-full-link-results/libmain.so"
+          test -s "$MAIN" || {
+            echo "::error::libmain.so não encontrado no resultado da compilação nativa"
+            find "$GITHUB_WORKSPACE" -name libmain.so -type f -print
+            exit 1
+          }
+
+          RUNTIME="$SDK/out/android-arm64/librexruntime.so"
+          test -s "$RUNTIME" || {
+            echo "::error::librexruntime.so não encontrado"
+            find "$SDK/out" -name '*.so' -print
+            exit 1
+          }
+
+          cp "$MAIN" "$JNI_LIBS/libmain.so"
           cp "$RUNTIME" "$JNI_LIBS/librexruntime.so"
 
-          echo "Native libraries staged:"
+          echo "Bibliotecas preparadas:"
           ls -lh "$JNI_LIBS"
+
+          echo "=== Verificando ABI ==="
+
+          file "$JNI_LIBS/libmain.so" "$JNI_LIBS/librexruntime.so"
+
+          readelf -h "$JNI_LIBS/libmain.so" | grep -E 'Class:|Machine:'
+          readelf -h "$JNI_LIBS/librexruntime.so" | grep -E 'Class:|Machine:'
+
+          echo "=== Compilando APK ==="
 
           chmod +x "$ANDROID_PROJECT/gradlew"
           cd "$ANDROID_PROJECT"
-          ./gradlew --no-daemon --stacktrace assembleDebug
 
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+          if ! ./gradlew --no-daemon --stacktrace assembleDebug; then
+            echo "::error::Gradle falhou. Diagnóstico da configuração SDL/NDK:"
+            sed -n '1,160p' app/jni/Android.mk || true
+            sed -n '1,200p' app/jni/src/Android.mk || true
+            sed -n '1,200p' app/jni/Application.mk || true
+            find app/jni -maxdepth 3 \
+              \( -name Android.mk -o -name Application.mk -o -name CMakeLists.txt \) \
+              -print
+            exit 1
+          fi
 
-          mkdir -p "$GITHUB_WORKSPACE/android-apk-results"
-          cp "$APK" "$GITHUB_WORKSPACE/android-apk-results/mcla-android-package-probe.apk"
+          APK="$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk"
 
-          sha256sum "$GITHUB_WORKSPACE/android-apk-results/mcla-android-package-probe.apk" \
-            > "$GITHUB_WORKSPACE/android-apk-results/SHA256SUMS.txt"
+          test -s "$APK" || {
+            echo "::error::Gradle terminou sem gerar o APK esperado"
+            find "$ANDROID_PROJECT/app/build/outputs" -type f -print 2>/dev/null || true
+            exit 1
+          }
+
+          echo "=== Validando APK ==="
+
+          cp "$APK" "$RESULTS/mcla-android-package-probe.apk"
+
+          sha256sum "$RESULTS/mcla-android-package-probe.apk" \
+            > "$RESULTS/SHA256SUMS.txt"
 
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
-            "$GITHUB_WORKSPACE/android-apk-results/mcla-android-package-probe.apk" | head -20
+            "$RESULTS/mcla-android-package-probe.apk" | head -20
 
+          echo "=== Conferindo bibliotecas dentro do APK ==="
+
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" list \
+            "$RESULTS/mcla-android-package-probe.apk" \
+            | grep -E 'lib/arm64-v8a/.*\.so$' || {
+              echo "::error::Nenhuma biblioteca nativa ARM64 foi encontrada no APK"
+              exit 1
+            }
+
+          echo "APK gerado e validado: $RESULTS/mcla-android-package-probe.apk"
+
+
+      
       - name: Upload Android APK probe
         if: success()
         uses: actions/upload-artifact@v4
