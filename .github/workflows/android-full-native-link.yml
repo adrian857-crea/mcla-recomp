@@ -1,3 +1,4 @@
+
 name: MCLA Android Full Native Link
 
 on:
@@ -10,13 +11,12 @@ jobs:
   android-full-link:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+
     steps:
       - name: Checkout MCLA
         uses: actions/checkout@v4
         with:
           submodules: false
- 
-
 
       - name: Install host dependencies
         shell: bash
@@ -24,38 +24,15 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake \
-            ninja-build \
-            git \
-            python3 \
-            unzip \
-            curl \
-            jq \
-            clang-19 \
-            pkg-config \
-            libx11-dev \
-            libwayland-dev \
-            libwayland-egl-backend-dev \
-            wayland-protocols \
-            libdecor-0-dev \
-            libx11-xcb-dev \
-            libxext-dev \
-            libxrender-dev \
-            libxfixes-dev \
-            libxcursor-dev \
-            libxi-dev \
-            libxrandr-dev \
-            libxss-dev \
-            libxtst-dev \
-            libxkbcommon-dev \
-            libxcb1-dev \
-            libxcb-randr0-dev \
-            libxcb-xfixes0-dev \
-            libxcb-shape0-dev \
-            libxcb-xinput-dev
+            cmake ninja-build git python3 unzip curl jq \
+            clang-19 pkg-config libx11-dev libwayland-dev \
+            libwayland-egl-backend-dev wayland-protocols \
+            libdecor-0-dev libx11-xcb-dev libxext-dev \
+            libxrender-dev libxfixes-dev libxcursor-dev \
+            libxi-dev libxrandr-dev libxss-dev libxtst-dev \
+            libxkbcommon-dev libxcb1-dev libxcb-randr0-dev \
+            libxcb-xfixes0-dev libxcb-shape0-dev libxcb-xinput-dev
 
-
-      
       - name: Download private default.xex
         shell: bash
         env:
@@ -75,6 +52,7 @@ jobs:
           Z="$RUNNER_TEMP/default-xex.zip"
           AH="$RUNNER_TEMP/asset-response-headers"
           BODY="$RUNNER_TEMP/asset-response-body"
+
           mkdir -p "$RUNNER_TEMP/xex" game
 
           printf 'Authorization: Bearer %s\nX-GitHub-Api-Version: 2022-11-28\n' \
@@ -113,15 +91,11 @@ jobs:
             echo "Following the asset redirect without forwarding the token."
             curl --retry 3 --retry-all-errors --retry-delay 2 \
               -fsSL "$LOCATION" -o "$Z"
-
           elif [ "$STATUS" = "200" ]; then
             mv "$BODY" "$Z"
-
           else
             echo "::error::Unexpected HTTP status from GitHub asset API: $STATUS"
-            echo "Response content type:"
             grep -i '^content-type:' "$AH" | tail -1 || true
-            echo "Response body preview (first 300 bytes):"
             head -c 300 "$BODY" || true
             echo
             exit 1
@@ -132,7 +106,6 @@ jobs:
 
           test "$ACTUAL_SIZE" -eq "$SIZE" || {
             echo "::error::Downloaded size does not match release metadata."
-            echo "The response may be an error page rather than the ZIP."
             file "$Z" || true
             exit 1
           }
@@ -144,7 +117,6 @@ jobs:
           }
 
           unzip -oq "$Z" -d "$RUNNER_TEMP/xex"
-
           XEX="$(find "$RUNNER_TEMP/xex" -type f -name default.xex -print -quit)"
 
           test -n "$XEX" || {
@@ -159,104 +131,199 @@ jobs:
 
           rm -f "$H" "$J" "$Z" "$AH" "$BODY"
           rm -rf "$RUNNER_TEMP/xex"
-      
 
       - name: Checkout ReXGlue SDK
+        shell: bash
         run: |
           set -euo pipefail
           git clone --recursive https://github.com/adrian857-crea/rexglue-sdk.git third_party/rexglue-sdk
           test -f third_party/rexglue-sdk/thirdparty/sdl3/android-project/app/src/main/java/org/libsdl/app/SDLActivity.java
 
       - name: Configure host FFmpeg
+        shell: bash
         run: |
           set -euo pipefail
           cd third_party/rexglue-sdk/thirdparty/FFmpeg
-          ./configure --disable-x86asm --disable-programs --disable-doc --disable-network --disable-autodetect --disable-everything --enable-avutil --enable-avcodec --disable-shared --enable-static
+          ./configure \
+            --disable-x86asm \
+            --disable-programs \
+            --disable-doc \
+            --disable-network \
+            --disable-autodetect \
+            --disable-everything \
+            --enable-avutil \
+            --enable-avcodec \
+            --disable-shared \
+            --enable-static
           test -f config.h
 
       - name: Build host ReXGlue code generator
+        shell: bash
         run: |
           set -euo pipefail
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
-          cmake -S "$SDK" -B build-rexglue-host -G Ninja -DCMAKE_C_COMPILER=clang-19 -DCMAKE_CXX_COMPILER=clang++-19 -DCMAKE_BUILD_TYPE=Release -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF
+
+          cmake -S "$SDK" -B build-rexglue-host -G Ninja \
+            -DCMAKE_C_COMPILER=clang-19 \
+            -DCMAKE_CXX_COMPILER=clang++-19 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF
+
           cmake --build build-rexglue-host --target rexglue --parallel 2
           test -x "$SDK/out/linux-amd64/rexglue"
           echo "HOST_CODEGEN=$SDK/out/linux-amd64/rexglue" >> "$GITHUB_ENV"
 
       - name: Generate MCLA C++ sources from private XEX
+        shell: bash
         run: |
           set -euo pipefail
           "$HOST_CODEGEN" codegen "$GITHUB_WORKSPACE/mcla_manifest.toml"
           test -s generated/default/sources.cmake
           test -s generated/default/mcla_pch.h
+
           N="$(find generated/default -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' \) | wc -l)"
           echo "Generated C++ files: $N"
           test "$N" -gt 0
           touch generated/default/codegen.build.stamp
 
       - name: Install Android SDK and NDK
+        shell: bash
         run: |
           set -euo pipefail
           SDK="$RUNNER_TEMP/android-sdk"
+
           mkdir -p "$SDK/cmdline-tools" "$RUNNER_TEMP/cmdline-tools"
-          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 -fSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o "$RUNNER_TEMP/cmdline-tools.zip"
+
+          curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
+            -fSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -o "$RUNNER_TEMP/cmdline-tools.zip"
+
           unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
           mkdir -p "$SDK/cmdline-tools/latest"
           mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* "$SDK/cmdline-tools/latest/"
+
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;27.2.12479018"
+
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
       - name: Configure Android FFmpeg
+        shell: bash
         run: |
           set -euo pipefail
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           T="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
           cd "$SDK/thirdparty/FFmpeg"
-          ./configure --arch=aarch64 --cpu=armv8-a --target-os=android --enable-cross-compile --cc="$T/aarch64-linux-android26-clang" --cxx="$T/aarch64-linux-android26-clang++" --ar="$T/llvm-ar" --ranlib="$T/llvm-ranlib" --nm="$T/llvm-nm" --strip="$T/llvm-strip" --disable-x86asm --disable-programs --disable-doc --disable-network --disable-autodetect --disable-everything --enable-avutil --enable-avcodec --disable-shared --enable-static
+
+          ./configure \
+            --arch=aarch64 \
+            --cpu=armv8-a \
+            --target-os=android \
+            --enable-cross-compile \
+            --cc="$T/aarch64-linux-android26-clang" \
+            --cxx="$T/aarch64-linux-android26-clang++" \
+            --ar="$T/llvm-ar" \
+            --ranlib="$T/llvm-ranlib" \
+            --nm="$T/llvm-nm" \
+            --strip="$T/llvm-strip" \
+            --disable-x86asm \
+            --disable-programs \
+            --disable-doc \
+            --disable-network \
+            --disable-autodetect \
+            --disable-everything \
+            --enable-avutil \
+            --enable-avcodec \
+            --disable-shared \
+            --enable-static
+
           test -f config.h
 
       - name: Patch Android assembly and host codegen
+        shell: bash
         run: |
           set -euo pipefail
+
           python3 - "$GITHUB_WORKSPACE/third_party/rexglue-sdk/CMakeLists.txt" "$GITHUB_WORKSPACE/generated/rexglue.cmake" <<'PY'
-          import pathlib, sys
-          p = pathlib.Path(sys.argv[1]); s = p.read_text()
+          import pathlib
+          import sys
+
+          p = pathlib.Path(sys.argv[1])
+          s = p.read_text()
+
           old = '"<CMAKE_ASM_COMPILER> <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
           new = '"<CMAKE_ASM_COMPILER> --target=aarch64-linux-android26 <DEFINES> <INCLUDES> <FLAGS> -o <OBJECT> -c <SOURCE>"'
-          if old in s: s = s.replace(old, new, 1)
-          elif new not in s: raise SystemExit("Android ASM rule not found")
+
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit("Android ASM rule not found")
+
           p.write_text(s)
-          p = pathlib.Path(sys.argv[2]); s = p.read_text()
+
+          p = pathlib.Path(sys.argv[2])
+          s = p.read_text()
+
           old = 'COMMAND $<TARGET_FILE:rex::rexglue> codegen ${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml'
           new = 'COMMAND "${REXGLUE_HOST_CODEGEN_EXECUTABLE}" codegen ${CMAKE_CURRENT_SOURCE_DIR}/mcla_manifest.toml'
-          if old in s: s = s.replace(old, new, 1)
-          elif new not in s: raise SystemExit("Could not patch host codegen command")
+
+          if old in s:
+              s = s.replace(old, new, 1)
+          elif new not in s:
+              raise SystemExit("Could not patch host codegen command")
+
           p.write_text(s)
           PY
 
       - name: Configure full MCLA Android ARM64 target
+        shell: bash
         run: |
           set -euo pipefail
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-          cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build-android" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 -DANDROID_STL=c++_shared -DCMAKE_BUILD_TYPE=Release -DREXSDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk" -DREXGLUE_HOST_CODEGEN_EXECUTABLE="$HOST_CODEGEN" -DREXGLUE_USE_VULKAN=ON -DREXGLUE_USE_D3D12=OFF -DREXGLUE_ENABLE_TRACY=OFF -DREXGLUE_BUILD_TESTS=OFF
+
+          cmake -S "$GITHUB_WORKSPACE" -B "$GITHUB_WORKSPACE/build-android" -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DREXSDK_DIR="$GITHUB_WORKSPACE/third_party/rexglue-sdk" \
+            -DREXGLUE_HOST_CODEGEN_EXECUTABLE="$HOST_CODEGEN" \
+            -DREXGLUE_USE_VULKAN=ON \
+            -DREXGLUE_USE_D3D12=OFF \
+            -DREXGLUE_ENABLE_TRACY=OFF \
+            -DREXGLUE_BUILD_TESTS=OFF
 
       - name: Compile and link full MCLA native library
+        shell: bash
         run: |
           set -euo pipefail
           cmake --build "$GITHUB_WORKSPACE/build-android" --target main --parallel 2
+
           LIB="$(find "$GITHUB_WORKSPACE/build-android" "$GITHUB_WORKSPACE/third_party/rexglue-sdk/out/android-arm64" -type f -name libmain.so -print -quit)"
-          test -n "$LIB" && test -s "$LIB" || { echo "libmain.so was not produced"; exit 1; }
+          test -n "$LIB" && test -s "$LIB" || {
+            echo "libmain.so was not produced"
+            exit 1
+          }
+
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$LIB"
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$LIB" | grep NEEDED || true
+
           mkdir -p native-full-link-results
           cp "$LIB" native-full-link-results/libmain.so
           sha256sum native-full-link-results/libmain.so > native-full-link-results/SHA256SUMS.txt
-
-
 
       - name: Package Android APK (SDL3 launcher probe)
         shell: bash
@@ -292,20 +359,11 @@ jobs:
 
           SDL_LINK="$JNI_DIR/SDL"
 
-          if [ -L "$SDL_LINK" ]; then
-            CURRENT_TARGET="$(readlink "$SDL_LINK")"
-            echo "Vínculo SDL existente: $CURRENT_TARGET"
-
-            if [ ! -e "$SDL_LINK/Android.mk" ]; then
-              rm "$SDL_LINK"
-            fi
+          if [ -L "$SDL_LINK" ] && [ ! -e "$SDL_LINK/Android.mk" ]; then
+            rm "$SDL_LINK"
           fi
 
           if [ ! -e "$SDL_LINK" ]; then
-            if [ -e "$SDL_LINK" ]; then
-              echo "::error::JNI/SDL existe, mas não é um SDL válido"
-              exit 1
-            fi
             ln -s "$SDL_SOURCE" "$SDL_LINK"
           fi
 
@@ -316,6 +374,34 @@ jobs:
           }
 
           echo "SDL Android.mk: $(readlink -f "$SDL_LINK/Android.mk")"
+
+          echo "=== Corrigindo conflito de libmain.so ==="
+
+          # O MCLA já fornece libmain.so. Renomeamos somente o módulo
+          # de exemplo do SDL para que ele não gere uma segunda libmain.so.
+          python3 - "$JNI_DIR/src/Android.mk" <<'PY'
+          import pathlib
+          import sys
+
+          p = pathlib.Path(sys.argv[1])
+          content = p.read_text()
+
+          old = "LOCAL_MODULE := main"
+          new = "LOCAL_MODULE := sdl3probe"
+
+          count = content.count(old)
+          if count != 1:
+              raise SystemExit(
+                  f"Esperava uma declaração '{old}', encontrei {count}"
+              )
+
+          p.write_text(content.replace(old, new, 1))
+          print("Módulo de exemplo renomeado para sdl3probe.")
+          PY
+
+          grep -n '^LOCAL_MODULE' "$JNI_DIR/src/Android.mk"
+
+          test "$(grep -c '^LOCAL_MODULE := sdl3probe$' "$JNI_DIR/src/Android.mk")" -eq 1
 
           echo "=== Preparando bibliotecas nativas ==="
 
@@ -344,7 +430,6 @@ jobs:
           echo "=== Verificando ABI ==="
 
           file "$JNI_LIBS/libmain.so" "$JNI_LIBS/librexruntime.so"
-
           readelf -h "$JNI_LIBS/libmain.so" | grep -E 'Class:|Machine:'
           readelf -h "$JNI_LIBS/librexruntime.so" | grep -E 'Class:|Machine:'
 
@@ -375,9 +460,7 @@ jobs:
           echo "=== Validando APK ==="
 
           cp "$APK" "$RESULTS/mcla-android-package-probe.apk"
-
-          sha256sum "$RESULTS/mcla-android-package-probe.apk" \
-            > "$RESULTS/SHA256SUMS.txt"
+          sha256sum "$RESULTS/mcla-android-package-probe.apk" > "$RESULTS/SHA256SUMS.txt"
 
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
             "$RESULTS/mcla-android-package-probe.apk" | head -20
@@ -393,8 +476,6 @@ jobs:
 
           echo "APK gerado e validado: $RESULTS/mcla-android-package-probe.apk"
 
-
-      
       - name: Upload Android APK probe
         if: success()
         uses: actions/upload-artifact@v4
