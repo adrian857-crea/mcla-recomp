@@ -1,15 +1,11 @@
 
-# mcla - ReXGlue Recompiled Project
-#
-# SDK boilerplate lives in generated/rexglue.cmake.
-
+# MCLA - ReXGlue Recompiled Project
 cmake_minimum_required(VERSION 3.25)
 project(mcla LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# SDL3 Android expects libmain.so.
 if(ANDROID)
     set(REXGLUE_HOST_TARGET main)
 endif()
@@ -36,7 +32,16 @@ if(ANDROID)
         ${MCLA_SOURCES}
         src/android_main.cpp
     )
+
     rexglue_setup_target(main)
+
+    # Propaga os diretórios públicos dos cabeçalhos do Dear ImGui.
+    if(TARGET imgui::imgui)
+        target_link_libraries(main PRIVATE imgui::imgui)
+    else()
+        message(FATAL_ERROR
+            "O alvo imgui::imgui não foi criado pelo SDK ReXGlue")
+    endif()
 
 elseif(WIN32)
     add_executable(mcla WIN32 ${MCLA_SOURCES})
