@@ -56,15 +56,49 @@ jobs:
           URL="$(jq -er --argjson id "$ID" '.assets[] | select(.id == $id) | .browser_download_url' "$J")"
 
           echo "Asset ID: $ID"
+
+      - name: Download private default.xex
+        shell: bash
+        env:
+          MCLA_ASSETS_TOKEN: ${{ secrets.MCLA_ASSETS_TOKEN }}
+        run: |
+          set -euo pipefail
+          set +x
+
+          test -n "${MCLA_ASSETS_TOKEN:-}" || {
+            echo "::error::Missing MCLA_ASSETS_TOKEN"
+            exit 1
+          }
+
+          API="https://api.github.com/repos/adrian857-crea/mcla-private-assets/releases/tags/android-input-test"
+          H="$RUNNER_TEMP/mcla-headers"
+          J="$RUNNER_TEMP/mcla-release.json"
+          Z="$RUNNER_TEMP/default-xex.zip"
+
+          mkdir -p "$RUNNER_TEMP/xex" game
+
+          printf 'Authorization: Bearer %s\n' \
+            "$MCLA_ASSETS_TOKEN" > "$H"
+          printf 'Accept: application/vnd.github+json\n' >> "$H"
+          printf 'X-GitHub-Api-Version: 2022-11-28\n' >> "$H"
+
+          curl --retry 3 --retry-all-errors --retry-delay 2 \
+            -fsSL -H @"$H" "$API" -o "$J"
+
+          ID="$(jq -er '[.assets[] | select(.name == "default-xex.zip")][0].id // empty' "$J")"
+          SIZE="$(jq -er --argjson id "$ID" '.assets[] | select(.id == $id) | .size' "$J")"
+
+          echo "Asset ID: $ID"
           echo "Expected size: $SIZE bytes"
-          echo "Downloading through the release browser URL..."
 
           test "$SIZE" -gt 0
 
-          curl --retry 4 --retry-all-errors --retry-delay 2 \
+          ASSET_API="https://api.github.com/repos/adrian857-crea/mcla-private-assets/releases/assets/$ID"
+
+          curl --retry 3 --retry-all-errors --retry-delay 2 \
             -fSL -H @"$H" \
             -H "Accept: application/octet-stream" \
-            "$URL" -o "$Z"
+            "$ASSET_API" -o "$Z"
 
           ACTUAL_SIZE="$(wc -c < "$Z" | tr -d ' ')"
           echo "Downloaded size: $ACTUAL_SIZE bytes"
@@ -75,7 +109,7 @@ jobs:
           }
 
           unzip -tq "$Z" >/dev/null || {
-            echo "::error::The downloaded file is not a valid ZIP archive."
+            echo "::error::Downloaded asset is not a valid ZIP."
             exit 1
           }
 
@@ -91,12 +125,10 @@ jobs:
           install -m 600 "$XEX" game/default.xex
           test -s game/default.xex
 
-          rm -f "$H" "$J" "$Z"
-          rm -rf "$RUNNER_TEMP/xex"
-
           echo "Private XEX downloaded and validated."
 
-
+          rm -f "$H" "$J" "$Z"
+          rm -rf "$RUNNER_TEMP/xex"
 
       - name: Checkout ReXGlue SDK
         run: |
