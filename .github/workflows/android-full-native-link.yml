@@ -188,32 +188,86 @@ jobs:
       test "$N" -gt 0
       touch generated/default/codegen.build.stamp
 
+  
   - name: Install Android SDK and NDK
     shell: bash
     run: |
       set -euo pipefail
+
       SDK="$RUNNER_TEMP/android-sdk"
+      CMDLINE_TOOLS="$SDK/cmdline-tools/latest"
+      NDK_VERSION="27.2.12479018"
+      NDK_PATH="$SDK/ndk/$NDK_VERSION"
+      SDKMANAGER="$CMDLINE_TOOLS/bin/sdkmanager"
 
       mkdir -p "$SDK/cmdline-tools" "$RUNNER_TEMP/cmdline-tools"
 
+      echo "=== Baixando Android command-line tools ==="
+
       curl --http1.1 --retry 5 --retry-all-errors --retry-delay 2 \
-        -fSL https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+        -fSL "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
         -o "$RUNNER_TEMP/cmdline-tools.zip"
 
+      unzip -tq "$RUNNER_TEMP/cmdline-tools.zip"
       unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
-      mkdir -p "$SDK/cmdline-tools/latest"
-      mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* "$SDK/cmdline-tools/latest/"
 
-      yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --licenses >/dev/null || true
+      mkdir -p "$CMDLINE_TOOLS"
+      mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools/"* "$CMDLINE_TOOLS/"
 
-      "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+      echo "=== Aceitando licenças Android ==="
+
+      yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses >/dev/null || true
+
+      echo "=== Instalando plataformas e build-tools ==="
+
+      "$SDKMANAGER" --sdk_root="$SDK" \
         "platform-tools" \
         "platforms;android-35" \
-        "build-tools;35.0.0" \
-        "ndk;27.2.12479018"
+        "build-tools;35.0.0"
+
+      echo "=== Instalando NDK $NDK_VERSION ==="
+
+      installed=false
+
+      for attempt in 1 2 3; do
+        echo "Tentativa $attempt de 3"
+
+        if "$SDKMANAGER" --sdk_root="$SDK" "ndk;$NDK_VERSION"; then
+          if [ -x "$NDK_PATH/ndk-build" ] && \
+             [ -x "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" ] && \
+             [ -x "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" ]; then
+            installed=true
+            break
+          fi
+
+          echo "::warning::A instalação do NDK parece incompleta."
+        else
+          echo "::warning::Falha na tentativa $attempt."
+        fi
+
+        if [ "$attempt" -lt 3 ]; then
+          echo "Limpando arquivos temporários e a instalação incompleta."
+
+          rm -rf "$NDK_PATH" "$SDK/.temp"
+          sleep 3
+        fi
+      done
+
+      if [ "$installed" != true ]; then
+        echo "::error::Não foi possível instalar e validar o NDK após 3 tentativas."
+        ls -la "$SDK/ndk" 2>/dev/null || true
+        exit 1
+      fi
+
+      echo "=== Validando NDK ==="
+
+      "$NDK_PATH/ndk-build" --version
+      "$NDK_PATH/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version
 
       echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
       echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+    
 
   - name: Configure Android FFmpeg
     shell: bash
