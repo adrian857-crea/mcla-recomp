@@ -1,6 +1,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
@@ -15,6 +16,29 @@
 
 // SDL3 Android loads libmain.so and invokes SDL_main().
 extern "C" SDL_DECLSPEC int SDLCALL SDL_main(int argc, char* argv[]) {
+#if defined(__ANDROID__)
+  // Configure app-private storage before ReXApp initializes its paths.
+  char* preference_path = SDL_GetPrefPath("CentralGamer", "MCLA");
+
+  if (preference_path && *preference_path) {
+    const std::filesystem::path app_path(preference_path);
+
+    // ReXGlue appends the application name to XDG_DATA_HOME.
+    // Use the parent so it does not append MCLA twice.
+    const std::string xdg_data_home =
+        app_path.parent_path().string();
+
+    if (!xdg_data_home.empty() &&
+        setenv("XDG_DATA_HOME", xdg_data_home.c_str(), 1) != 0) {
+      SDL_Log("Could not set XDG_DATA_HOME");
+    }
+  } else {
+    SDL_Log("SDL_GetPrefPath failed: %s", SDL_GetError());
+  }
+
+  SDL_free(preference_path);
+#endif
+
   auto remaining = rex::cvar::Init(argc, argv);
   rex::cvar::ApplyEnvironment();
   rex::InitLoggingEarly();
