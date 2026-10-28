@@ -33,7 +33,7 @@ if(ANDROID)
         src/android_main.cpp
     )
 
-    rexglue_setup_target(main)
+        rexglue_setup_target(main GPU_PLUGINS xenos)
 
     # Propaga os diretórios públicos dos cabeçalhos do Dear ImGui.
     if(TARGET imgui::imgui)
