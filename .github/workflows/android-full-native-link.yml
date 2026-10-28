@@ -303,192 +303,277 @@ jobs:
         -DREXGLUE_USE_D3D12=OFF \
         -DREXGLUE_ENABLE_TRACY=OFF \
         -DREXGLUE_BUILD_TESTS=OFF
+  
 
-  - name: Compile and link full MCLA native library
-    shell: bash
-    run: |
-      set -euo pipefail
-      cmake --build "$GITHUB_WORKSPACE/build-android" --target main --parallel 2
+      - name: Compile and link full MCLA native library and Xenos plugin
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      LIB="$(find "$GITHUB_WORKSPACE/build-android" "$GITHUB_WORKSPACE/third_party/rexglue-sdk/out/android-arm64" -type f -name libmain.so -print -quit)"
-      test -n "$LIB" && test -s "$LIB" || {
-        echo "libmain.so was not produced"
-        exit 1
-      }
+          BUILD="$GITHUB_WORKSPACE/build-android"
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          RESULTS="$GITHUB_WORKSPACE/native-full-link-results"
 
-      NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-      "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -h "$LIB"
-      "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d "$LIB" | grep NEEDED || true
+          mkdir -p "$RESULTS"
 
-      mkdir -p native-full-link-results
-      cp "$LIB" native-full-link-results/libmain.so
-      sha256sum native-full-link-results/libmain.so > native-full-link-results/SHA256SUMS.txt
+          echo "=== Compilando MCLA e dependências gráficas ==="
 
-  - name: Package Android APK (SDL3 launcher probe)
-    shell: bash
-    run: |
-      set -euo pipefail
+          cmake --build "$BUILD" --target main --parallel 2
 
-      SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
-      SDL_SOURCE="$SDK/thirdparty/sdl3"
-      ANDROID_PROJECT="$SDL_SOURCE/android-project"
-      JNI_DIR="$ANDROID_PROJECT/app/jni"
-      JNI_LIBS="$ANDROID_PROJECT/app/src/main/jniLibs/arm64-v8a"
-      RESULTS="$GITHUB_WORKSPACE/android-apk-results"
+          echo "=== Localizando libmain.so ==="
 
-      echo "=== Verificando estrutura SDL3 ==="
+          MAIN="$(find "$BUILD" -type f -name libmain.so -print -quit)"
 
-      test -f "$ANDROID_PROJECT/gradlew" || {
-        echo "::error::Gradle wrapper do SDL3 não encontrado"
-        find "$SDL_SOURCE" -maxdepth 4 \
-          \( -name gradlew -o -name Android.mk -o -name SDLActivity.java \) \
-          -print | head -200
-        exit 1
-      }
+          if [ -z "$MAIN" ] || [ ! -s "$MAIN" ]; then
+            echo "::error::libmain.so não foi produzida"
+            find "$BUILD" -type f -name '*.so' -print || true
+            exit 1
+          fi
 
-      test -f "$ANDROID_PROJECT/app/src/main/AndroidManifest.xml"
-      test -f "$JNI_DIR/Android.mk"
-      test -f "$JNI_DIR/src/Android.mk"
-      test -f "$SDL_SOURCE/Android.mk" || {
-        echo "::error::Android.mk não encontrado na raiz do SDL3"
-        exit 1
-      }
+          echo "libmain.so: $MAIN"
 
-      echo "=== Preparando o vínculo SDL ==="
+          echo "=== Localizando o plugin Xenos ==="
 
-      SDL_LINK="$JNI_DIR/SDL"
+          PLUGIN="$(find "$BUILD" "$SDK/out" -type f -name librexgpu-xenos.so -print -quit 2>/dev/null || true)"
 
-      if [ -L "$SDL_LINK" ] && [ ! -e "$SDL_LINK/Android.mk" ]; then
-        rm "$SDL_LINK"
-      fi
+          if [ -z "$PLUGIN" ] || [ ! -s "$PLUGIN" ]; then
+            echo "::error::librexgpu-xenos.so não foi encontrada"
+            find "$BUILD" "$SDK/out" -type f -iname '*xenos*.so' -print 2>/dev/null || true
+            exit 1
+          fi
 
-      if [ ! -e "$SDL_LINK" ]; then
-        ln -s "$SDL_SOURCE" "$SDL_LINK"
-      fi
+          echo "Plugin Xenos: $PLUGIN"
 
-      test -f "$SDL_LINK/Android.mk" || {
-        echo "::error::O vínculo SDL não aponta para fontes válidos"
-        ls -la "$JNI_DIR"
-        exit 1
-      }
+          echo "=== Localizando o runtime ==="
 
-      echo "SDL Android.mk: $(readlink -f "$SDL_LINK/Android.mk")"
+          RUNTIME="$(find "$SDK/out" -type f -name librexruntime.so -print -quit)"
 
-      echo "=== Corrigindo conflito de libmain.so ==="
+          if [ -z "$RUNTIME" ] || [ ! -s "$RUNTIME" ]; then
+            echo "::error::librexruntime.so não foi encontrada"
+            find "$SDK/out" -type f -name '*.so' -print || true
+            exit 1
+          fi
 
-      python3 - "$JNI_DIR/src/Android.mk" <<'PY'
-      import pathlib
-      import sys
+          echo "Runtime: $RUNTIME"
 
-      p = pathlib.Path(sys.argv[1])
-      content = p.read_text()
+          echo "=== Validando arquitetura ARM64 ==="
 
-      old = "LOCAL_MODULE := main"
-      new = "LOCAL_MODULE := sdl3probe"
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+          READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 
-      count = content.count(old)
-      if count != 1:
-          raise SystemExit(
-              f"Esperava uma declaração '{old}', encontrei {count}"
-          )
+          if [ ! -x "$READELF" ]; then
+            echo "::error::llvm-readelf não foi encontrado no NDK"
+            exit 1
+          fi
 
-      p.write_text(content.replace(old, new, 1))
-      print("Módulo de exemplo renomeado para sdl3probe.")
-      PY
+          for LIB in "$MAIN" "$PLUGIN" "$RUNTIME"; do
+            echo "--- $LIB"
+            "$READELF" -h "$LIB"
+            "$READELF" -d "$LIB" | grep NEEDED || true
+          done
 
-      grep -n '^LOCAL_MODULE' "$JNI_DIR/src/Android.mk"
-      test "$(grep -c '^LOCAL_MODULE := sdl3probe$' "$JNI_DIR/src/Android.mk")" -eq 1
+          echo "=== Preservando as bibliotecas nativas ==="
 
-      echo "=== Preparando bibliotecas nativas ==="
+          cp "$MAIN" "$RESULTS/libmain.so"
+          cp "$PLUGIN" "$RESULTS/librexgpu-xenos.so"
+          cp "$RUNTIME" "$RESULTS/librexruntime.so"
 
-      mkdir -p "$JNI_LIBS" "$RESULTS"
+          sha256sum "$RESULTS"/*.so > "$RESULTS/SHA256SUMS.txt"
 
-      MAIN="$GITHUB_WORKSPACE/native-full-link-results/libmain.so"
-      test -s "$MAIN" || {
-        echo "::error::libmain.so não encontrado no resultado da compilação nativa"
-        find "$GITHUB_WORKSPACE" -name libmain.so -type f -print
-        exit 1
-      }
+          echo "=== Bibliotecas preservadas ==="
 
-      RUNTIME="$SDK/out/android-arm64/librexruntime.so"
-      test -s "$RUNTIME" || {
-        echo "::error::librexruntime.so não encontrado"
-        find "$SDK/out" -name '*.so' -print
-        exit 1
-      }
+          ls -lh "$RESULTS"
 
-      NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
-      CXX_RUNTIME="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+          test -s "$RESULTS/libmain.so"
+          test -s "$RESULTS/librexgpu-xenos.so"
+          test -s "$RESULTS/librexruntime.so"
 
-      test -s "$CXX_RUNTIME" || {
-        echo "::error::libc++_shared.so não encontrada no NDK"
-        find "$NDK" -name libc++_shared.so -type f -print
-        exit 1
-      }
 
-      cp "$MAIN" "$JNI_LIBS/libmain.so"
-      cp "$RUNTIME" "$JNI_LIBS/librexruntime.so"
-      cp "$CXX_RUNTIME" "$JNI_LIBS/libc++_shared.so"
 
-      echo "Bibliotecas preparadas:"
-      ls -lh "$JNI_LIBS"
+        - name: Package Android APK (SDL3 launcher probe)
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      echo "=== Verificando ABI ==="
+          SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
+          SDL_SOURCE="$SDK/thirdparty/sdl3"
+          ANDROID_PROJECT="$SDL_SOURCE/android-project"
+          JNI_DIR="$ANDROID_PROJECT/app/jni"
+          JNI_LIBS="$ANDROID_PROJECT/app/src/main/jniLibs/arm64-v8a"
+          RESULTS="$GITHUB_WORKSPACE/android-apk-results"
+          NATIVE_RESULTS="$GITHUB_WORKSPACE/native-full-link-results"
 
-      file "$JNI_LIBS/libmain.so" "$JNI_LIBS/librexruntime.so" "$JNI_LIBS/libc++_shared.so"
-      readelf -h "$JNI_LIBS/libmain.so" | grep -E 'Class:|Machine:'
-      readelf -h "$JNI_LIBS/librexruntime.so" | grep -E 'Class:|Machine:'
-      readelf -h "$JNI_LIBS/libc++_shared.so" | grep -E 'Class:|Machine:'
+          echo "=== Verificando estrutura SDL3 ==="
 
-      echo "=== Compilando APK ==="
+          test -f "$ANDROID_PROJECT/gradlew"
+          test -f "$ANDROID_PROJECT/app/src/main/AndroidManifest.xml"
+          test -f "$JNI_DIR/Android.mk"
+          test -f "$JNI_DIR/src/Android.mk"
+          test -f "$SDL_SOURCE/Android.mk"
 
-      chmod +x "$ANDROID_PROJECT/gradlew"
-      cd "$ANDROID_PROJECT"
+          echo "=== Preparando o vínculo SDL ==="
 
-      if ! ./gradlew --no-daemon --stacktrace assembleDebug; then
-        echo "::error::Gradle falhou. Diagnóstico da configuração SDL/NDK:"
-        sed -n '1,160p' app/jni/Android.mk || true
-        sed -n '1,200p' app/jni/src/Android.mk || true
-        sed -n '1,200p' app/jni/Application.mk || true
-        find app/jni -maxdepth 3 \
-          \( -name Android.mk -o -name Application.mk -o -name CMakeLists.txt \) \
-          -print
-        exit 1
-      fi
+          SDL_LINK="$JNI_DIR/SDL"
 
-      APK="$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk"
+          if [ -L "$SDL_LINK" ] && [ ! -e "$SDL_LINK/Android.mk" ]; then
+            rm "$SDL_LINK"
+          fi
 
-      test -s "$APK" || {
-        echo "::error::Gradle terminou sem gerar o APK esperado"
-        find "$ANDROID_PROJECT/app/build/outputs" -type f -print 2>/dev/null || true
-        exit 1
-      }
+          if [ ! -e "$SDL_LINK" ]; then
+            ln -s "$SDL_SOURCE" "$SDL_LINK"
+          fi
 
-      echo "=== Validando APK ==="
+          test -f "$SDL_LINK/Android.mk" || {
+            echo "::error::O vínculo SDL não aponta para fontes válidos"
+            ls -la "$JNI_DIR"
+            exit 1
+          }
 
-      cp "$APK" "$RESULTS/mcla-android-package-probe.apk"
-      sha256sum "$RESULTS/mcla-android-package-probe.apk" > "$RESULTS/SHA256SUMS.txt"
+          echo "SDL Android.mk: $(readlink -f "$SDL_LINK/Android.mk")"
 
-      "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging \
-        "$RESULTS/mcla-android-package-probe.apk" | head -20
+          echo "=== Verificando módulo nativo de exemplo ==="
 
-      echo "=== Conferindo bibliotecas dentro do APK ==="
+          python3 - "$JNI_DIR/src/Android.mk" <<'PY'
+          import pathlib
+          import sys
 
-      "$ANDROID_HOME/build-tools/35.0.0/aapt" list \
-        "$RESULTS/mcla-android-package-probe.apk" \
-        | grep -E 'lib/arm64-v8a/.*\.so$' || {
-          echo "::error::Nenhuma biblioteca nativa ARM64 foi encontrada no APK"
-          exit 1
-        }
+          p = pathlib.Path(sys.argv[1])
+          content = p.read_text()
 
-      "$ANDROID_HOME/build-tools/35.0.0/aapt" list \
-        "$RESULTS/mcla-android-package-probe.apk" \
-        | grep -q '^lib/arm64-v8a/libc++_shared.so$' || {
-          echo "::error::libc++_shared.so não foi incluída no APK"
-          exit 1
-        }
+          old = "LOCAL_MODULE := main"
+          new = "LOCAL_MODULE := sdl3probe"
 
-      echo "APK gerado e validado: $RESULTS/mcla-android-package-probe.apk"
+          count = content.count(old)
+
+          if count == 1:
+              content = content.replace(old, new, 1)
+          elif count != 0:
+              raise SystemExit(
+                  f"Esperava no máximo uma declaração '{old}', encontrei {count}"
+              )
+          elif new not in content:
+              raise SystemExit(
+                  "Não encontrei o módulo 'main' nem o módulo já renomeado 'sdl3probe'"
+              )
+
+          p.write_text(content)
+          print("Módulo SDL de exemplo configurado como sdl3probe.")
+          PY
+
+          grep -n '^LOCAL_MODULE' "$JNI_DIR/src/Android.mk"
+
+          test "$(grep -c '^LOCAL_MODULE := sdl3probe$' \
+            "$JNI_DIR/src/Android.mk")" -eq 1
+
+          echo "=== Preparando bibliotecas ARM64 ==="
+
+          mkdir -p "$JNI_LIBS" "$RESULTS"
+
+          for LIB in \
+            libmain.so \
+            librexruntime.so \
+            librexgpu-xenos.so; do
+
+            test -s "$NATIVE_RESULTS/$LIB" || {
+              echo "::error::$LIB não foi encontrada nos resultados nativos"
+              ls -lh "$NATIVE_RESULTS" || true
+              exit 1
+            }
+
+            cp "$NATIVE_RESULTS/$LIB" "$JNI_LIBS/$LIB"
+          done
+
+          NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
+
+          CXX_RUNTIME="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so"
+
+          test -s "$CXX_RUNTIME" || {
+            echo "::error::libc++_shared.so não encontrada"
+            find "$NDK" -name libc++_shared.so -type f -print
+            exit 1
+          }
+
+          cp "$CXX_RUNTIME" "$JNI_LIBS/libc++_shared.so"
+
+          echo "=== Bibliotecas preparadas ==="
+
+          ls -lh "$JNI_LIBS"
+
+          for LIB in "$JNI_LIBS"/*.so; do
+            echo "--- $LIB"
+            file "$LIB"
+            readelf -h "$LIB" | grep -E 'Class:|Machine:'
+          done
+
+          echo "=== Compilando APK ==="
+
+          chmod +x "$ANDROID_PROJECT/gradlew"
+          cd "$ANDROID_PROJECT"
+
+          if ! ./gradlew --no-daemon --stacktrace assembleDebug; then
+            echo "::error::Gradle falhou"
+
+            sed -n '1,160p' app/jni/Android.mk || true
+            sed -n '1,200p' app/jni/src/Android.mk || true
+            sed -n '1,200p' app/jni/Application.mk || true
+
+            exit 1
+          fi
+
+          APK="$ANDROID_PROJECT/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK" || {
+            echo "::error::APK não foi gerado no caminho esperado"
+            find "$ANDROID_PROJECT/app/build/outputs" \
+              -type f -print 2>/dev/null || true
+            exit 1
+          }
+
+          echo "=== Copiando e validando APK ==="
+
+          cp "$APK" "$RESULTS/mcla-android-package-probe.apk"
+
+          APK="$RESULTS/mcla-android-package-probe.apk"
+
+          sha256sum "$APK" > "$RESULTS/SHA256SUMS.txt"
+
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" \
+            | head -20
+
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" list "$APK" \
+            > "$RUNNER_TEMP/mcla-apk-file-list.txt"
+
+          APK_LIST="$RUNNER_TEMP/mcla-apk-file-list.txt"
+
+          echo "=== Bibliotecas nativas encontradas no APK ==="
+
+          grep -E '^lib/arm64-v8a/.*\.so$' "$APK_LIST" || {
+            echo "::error::Nenhuma biblioteca nativa ARM64 encontrada"
+            exit 1
+          }
+
+          echo "=== Verificando bibliotecas obrigatórias ==="
+
+          for LIB in \
+            libmain.so \
+            libSDL3.so \
+            librexruntime.so \
+            librexgpu-xenos.so \
+            libc++_shared.so; do
+
+            if ! grep -Fqx "lib/arm64-v8a/$LIB" "$APK_LIST"; then
+              echo "::error::$LIB não foi incluída em lib/arm64-v8a/"
+              echo "Bibliotecas presentes:"
+              grep -E '^lib/arm64-v8a/.*\.so$' "$APK_LIST" || true
+              exit 1
+            fi
+
+            echo "OK: $LIB"
+          done
+
+          echo "APK validado com as bibliotecas nativas esperadas."
+          ls -lh "$APK"
+
 
   - name: Upload Android APK probe
     if: success()
