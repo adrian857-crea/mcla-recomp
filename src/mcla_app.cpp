@@ -17,9 +17,13 @@
 #include <rex/runtime.h>
 #include <rex/system/gpu_plugin.h>
 
+
 REXCVAR_DEFINE_STRING(
     mcla_gpu_backend, "any", "MCLA",
     "Graphics backend for the Xenos GPU plugin: any, vulkan or d3d12");
+
+std::unique_ptr<rex::system::IAudioSystem> CreateMclaAudioSystem(
+    rex::runtime::FunctionDispatcher* function_dispatcher);
 
 namespace {
 
@@ -32,6 +36,7 @@ void MclaAppBootLog(const std::string& message) {
 }
 
 }  // namespace
+
 
 void MclaApp::OnConfigurePaths(rex::PathConfig& paths) {
   MclaAppBootLog("PATH 01: OnConfigurePaths entrou");
