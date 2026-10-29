@@ -372,6 +372,8 @@ jobs:
             -DREXGLUE_ENABLE_TRACY=OFF \
             -DREXGLUE_BUILD_TESTS=OFF
 
+
+
       - name: Compile and link full MCLA native library and Xenos plugin
         shell: bash
         run: |
@@ -380,80 +382,93 @@ jobs:
           BUILD="$GITHUB_WORKSPACE/build-android"
           SDK="$GITHUB_WORKSPACE/third_party/rexglue-sdk"
           RESULTS="$GITHUB_WORKSPACE/native-full-link-results"
+          ANDROID_OUT="$SDK/out/android-arm64"
 
           mkdir -p "$RESULTS"
 
-          echo "=== Compilando MCLA e dependências gráficas ==="
+          echo "=== Compilando o alvo Android ARM64 ==="
 
           cmake --build "$BUILD" --target main --parallel 2
 
           echo "=== Localizando libmain.so ==="
 
-          MAIN="$(find "$BUILD" -type f -name libmain.so -print -quit)"
+          MAIN="$BUILD/libmain.so"
 
-          if [ -z "$MAIN" ] || [ ! -s "$MAIN" ]; then
-            echo "::error::libmain.so não foi produzida"
+          if [ ! -s "$MAIN" ]; then
+            MAIN="$(find "$BUILD" -type f -name libmain.so -print -quit)"
+          fi
+
+          test -n "$MAIN" && test -s "$MAIN" || {
+            echo "::error::libmain.so não foi produzida."
             find "$BUILD" -type f -name '*.so' -print || true
             exit 1
-          fi
+          }
 
-          echo "libmain.so: $MAIN"
+          echo "=== Verificando saídas Android do ReXGlue ==="
 
-          echo "=== Localizando o plugin Xenos ==="
+          RUNTIME="$ANDROID_OUT/librexruntime.so"
+          PLUGIN="$ANDROID_OUT/librexgpu-xenos.so"
 
-          PLUGIN="$(find "$BUILD" "$SDK/out" -type f -name librexgpu-xenos.so -print -quit 2>/dev/null || true)"
+          for LIB in "$RUNTIME" "$PLUGIN"; do
+            if [ ! -s "$LIB" ]; then
+              echo "::error::Biblioteca Android ausente: $LIB"
+              echo "Arquivos disponíveis:"
+              find "$SDK/out" -type f \
+                \( -name 'librexruntime.so' -o \
+                   -name 'librexgpu-xenos.so' \) -print || true
+              exit 1
+            fi
+          done
 
-          if [ -z "$PLUGIN" ] || [ ! -s "$PLUGIN" ]; then
-            echo "::error::librexgpu-xenos.so não foi encontrada"
-            find "$BUILD" "$SDK/out" -type f -iname '*xenos*.so' -print 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "Plugin Xenos: $PLUGIN"
-
-          echo "=== Localizando o runtime ==="
-
-          RUNTIME="$(find "$SDK/out" -type f -name librexruntime.so -print -quit)"
-
-          if [ -z "$RUNTIME" ] || [ ! -s "$RUNTIME" ]; then
-            echo "::error::librexruntime.so não foi encontrada"
-            find "$SDK/out" -type f -name '*.so' -print || true
-            exit 1
-          fi
-
-          echo "Runtime: $RUNTIME"
-
-          echo "=== Validando arquitetura ARM64 ==="
+          echo "=== Validando arquitetura de TODAS as bibliotecas ==="
 
           NDK="$ANDROID_SDK_ROOT/ndk/27.2.12479018"
           READELF="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf"
 
-          if [ ! -x "$READELF" ]; then
-            echo "::error::llvm-readelf não foi encontrado no NDK"
+          test -x "$READELF" || {
+            echo "::error::llvm-readelf não encontrado."
             exit 1
-          fi
+          }
 
-          for LIB in "$MAIN" "$PLUGIN" "$RUNTIME"; do
+          for LIB in "$MAIN" "$RUNTIME" "$PLUGIN"; do
             echo "--- $LIB"
-            "$READELF" -h "$LIB"
+
+            HEADER="$("$READELF" -h "$LIB")"
+            printf '%s\n' "$HEADER" | grep -E 'Class:|Machine:'
+
+            printf '%s\n' "$HEADER" | grep -q 'Machine:.*AArch64' || {
+              echo "::error::A biblioteca não é ARM64: $LIB"
+              exit 1
+            }
+
+            printf '%s\n' "$HEADER" | grep -q 'Class:.*ELF64' || {
+              echo "::error::A biblioteca não é ELF64: $LIB"
+              exit 1
+            }
+
             "$READELF" -d "$LIB" | grep NEEDED || true
           done
 
-          echo "=== Preservando as bibliotecas nativas ==="
+          echo "=== Copiando somente as bibliotecas verificadas ==="
 
-          cp "$MAIN" "$RESULTS/libmain.so"
-          cp "$PLUGIN" "$RESULTS/librexgpu-xenos.so"
-          cp "$RUNTIME" "$RESULTS/librexruntime.so"
+          install -m 644 "$MAIN" "$RESULTS/libmain.so"
+          install -m 644 "$RUNTIME" "$RESULTS/librexruntime.so"
+          install -m 644 "$PLUGIN" "$RESULTS/librexgpu-xenos.so"
+
+          for LIB in "$RESULTS"/*.so; do
+            "$READELF" -h "$LIB" | grep -q 'Machine:.*AArch64' || {
+              echo "::error::Falha na validação final: $LIB"
+              exit 1
+            }
+          done
 
           sha256sum "$RESULTS"/*.so > "$RESULTS/SHA256SUMS.txt"
 
-          echo "=== Bibliotecas preservadas ==="
-
+          echo "=== Resultado ==="
           ls -lh "$RESULTS"
+          echo "As três bibliotecas são ARM64."
 
-          test -s "$RESULTS/libmain.so"
-          test -s "$RESULTS/librexgpu-xenos.so"
-          test -s "$RESULTS/librexruntime.so"
+      
 
       - name: Package Android APK (SDL3 launcher probe)
         shell: bash
